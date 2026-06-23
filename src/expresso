@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+
+# Enforce strict error handling
+set -euo pipefail
+
+# --- Configuration ---
+UNIT_NAME="expresso"
+TIMER_UNIT="${UNIT_NAME}.timer"
+SERVICE_UNIT="${UNIT_NAME}.service"
+INHIBITOR_UNIT="${UNIT_NAME}-inhibitor.service"
+
+# --- Functions ---
+
+show_help() {
+    cat <<EOF
+Usage: expresso <command> [argument]
+
+Commands:
+  start <time>   Starts a caffeine lock. Defaults to minutes if no unit is given.
+                 Formats: '15', '15m', '15s', '1h', 'infinite', 'inf'.
+  stop           Cancels any active caffeine lock.
+  status         Returns the current timer status and time remaining.
+  menu           Opens the interactive Rofi GUI.
+  help           Shows this help message.
+
+Examples:
+  expresso start 30
+  expresso start infinite
+  expresso status
+  expresso menu
+EOF
+}
+
+stop_timer() {
+    local quiet="${1:-false}"
+
+    # Stop the timer, the payload service, and the background inhibitor
+    systemctl --user stop "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" 2>/dev/null || true
+    systemctl --user reset-failed "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" 2>/dev/null || true
+
+    if [[ "$quiet" != "true" ]]; then
+        notify-send -a "expresso" "Expresso Off" "Sleep inhibition disabled"
+    fi
+}
+
+start_timer() {
+    local duration="$1"
+
+    if [[ -z "$duration" ]]; then
+        echo "Error: Duration not provided." >&2
+        show_help
+        exit 1
+    fi
+
+    stop_timer "true"
+
+    # 1. Start the background inhibitor process
+    # systemd-inhibit prevents logind from suspending or idling the system
+    systemd-run --user \
+        --unit="${UNIT_NAME}-inhibitor" \
+        systemd-inhibit --what=idle:sleep --who="expresso" --why="User requested" sleep infinity >/dev/null 2>&1
+
+    # Check for infinite mode
+    if [[ "${duration,,}" == "infinite" || "${duration,,}" == "inf" ]]; then
+        echo "Expresso started: System will stay awake indefinitely."
+        notify-send -a "expresso" "Expresso Active" "Sleep inhibition: Infinite"
+        return
+    fi
+
+    if [[ "$duration" =~ ^[0-9]+$ ]]; then
+        duration="${duration}m"
+    fi
+
+    # 2. Start the transient timer to kill the inhibitor when time is up
+    systemd-run --user \
+        --unit="$UNIT_NAME" \
+        --on-active="$duration" \
+        --timer-property="AccuracySec=1s" \
+        systemctl --user stop "$INHIBITOR_UNIT" >/dev/null 2>&1
+
+    echo "Expresso started: System will stay awake for $duration."
+    notify-send -a "expresso" "Expresso Active" "Sleep inhibition: $duration"
+}
+
+get_status() {
+    # Verify the inhibitor is actually running
+    local inhibitor_state
+    inhibitor_state=$(systemctl --user is-active "$INHIBITOR_UNIT" 2>/dev/null || true)
+
+    if [[ "$inhibitor_state" != "active" ]]; then
+        echo "Inactive"
+        return
+    fi
+
+    # If the inhibitor is running but there is no timer, it is set to Infinite
+    local timer_state
+    timer_state=$(systemctl --user is-active "$TIMER_UNIT" 2>/dev/null || true)
+
+    if [[ "$timer_state" != "active" ]]; then
+        echo "Infinite"
+        return
+    fi
+
+    local timer_output
+    timer_output=$(systemctl --user list-timers "$TIMER_UNIT" --no-legend 2>/dev/null || true)
+
+    if [[ -z "$timer_output" ]]; then
+        echo "Active"
+        return
+    fi
+
+    local target_time
+    target_time=$(echo "$timer_output" | awk '{print $2, $3, $4}')
+
+    if [[ -z "$target_time" ]]; then
+        echo "Active"
+        return
+    fi
+
+    local next_sec
+    next_sec=$(date -d "$target_time" +%s 2>/dev/null || true)
+
+    if [[ -z "$next_sec" ]]; then
+        echo "Active"
+        return
+    fi
+
+    local now_sec
+    now_sec=$(date +%s)
+    local diff_sec=$((next_sec - now_sec))
+
+    if ((diff_sec <= 0)); then
+        echo "Stopping..."
+        return
+    fi
+
+    local hours=$((diff_sec / 3600))
+    local mins=$(((diff_sec % 3600) / 60))
+
+    if ((hours > 0)); then
+        echo "${hours}h ${mins}m"
+    elif ((mins > 0)); then
+        echo "${mins}m"
+    else
+        echo "<1m"
+    fi
+}
+
+show_menu() {
+    if ! command -v rofi &>/dev/null; then
+        echo "Error: rofi is not installed or not in PATH." >&2
+        exit 1
+    fi
+
+    local current_status
+    current_status=$(get_status)
+
+    local options="15 min\n30 min\n1 hour\n2 hours\nInfinite\nCustom..."
+
+    if [[ "$current_status" != "Inactive" ]]; then
+        options="$options\n────────────────────────\nTurn Off ($current_status)"
+    fi
+
+    local choice
+    choice=$(echo -e "$options" | rofi -dmenu -i -p "Expresso:" || true)
+
+    case "$choice" in
+    "15 min")
+        start_timer "15m"
+        ;;
+    "30 min")
+        start_timer "30m"
+        ;;
+    "1 hour")
+        start_timer "1h"
+        ;;
+    "2 hours")
+        start_timer "2h"
+        ;;
+    "Infinite")
+        start_timer "infinite"
+        ;;
+    "Custom...")
+        local custom_time
+        custom_time=$(rofi -dmenu -p "Enter time (e.g., 45, 1h, inf):" || true)
+
+        if [[ "${custom_time,,}" == "infinite" || "${custom_time,,}" == "inf" ]]; then
+            start_timer "infinite"
+        elif [[ "$custom_time" =~ ^[0-9]+[a-zA-Z0-9\ ]*$ ]]; then
+            start_timer "$custom_time"
+        elif [[ -n "$custom_time" ]]; then
+            notify-send -u critical -a "expresso" "Error" "Invalid input. Please start with a number or type 'inf'."
+        fi
+        ;;
+    "Turn Off"*)
+        stop_timer
+        ;;
+    "──────────────")
+        exit 0
+        ;;
+    "")
+        exit 0
+        ;;
+    *)
+        notify-send -u critical -a "expresso" "Error" "Unknown selection."
+        exit 1
+        ;;
+    esac
+}
+
+# --- Main Logic Routing ---
+
+if [[ $# -eq 0 ]]; then
+    show_help
+    exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+start)
+    start_timer "${1:-}"
+    ;;
+stop)
+    stop_timer
+    echo "Timer stopped."
+    ;;
+status)
+    get_status
+    ;;
+menu)
+    show_menu
+    ;;
+help | --help | -h)
+    show_help
+    ;;
+*)
+    echo "Error: Unknown command '$COMMAND'" >&2
+    show_help
+    exit 1
+    ;;
+esac
