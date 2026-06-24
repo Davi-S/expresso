@@ -8,12 +8,14 @@ UNIT_NAME="expresso"
 TIMER_UNIT="${UNIT_NAME}.timer"
 SERVICE_UNIT="${UNIT_NAME}.service"
 INHIBITOR_UNIT="${UNIT_NAME}-inhibitor.service"
+WAYLAND_INHIBITOR_UNIT="${UNIT_NAME}-wayland.service"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/expresso"
 CONFIG_FILE="$CONFIG_DIR/expresso.conf"
 
 # --- Default Settings ---
 BLOCK_LID="false"
+BLOCK_IDLE="false"
 
 # --- Functions ---
 
@@ -47,9 +49,9 @@ EOF
 stop_timer() {
     local quiet="${1:-false}"
 
-    # Stop the timer, the payload service, and the background inhibitor
-    systemctl --user stop "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" 2>/dev/null || true
-    systemctl --user reset-failed "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" 2>/dev/null || true
+    # Stop the timer, the payload service, the logind inhibitor, and the Wayland inhibitor
+    systemctl --user stop "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" 2>/dev/null || true
+    systemctl --user reset-failed "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" 2>/dev/null || true
 
     if [[ "$quiet" != "true" ]]; then
         notify-send -a "expresso" "Expresso Off" "Sleep inhibition disabled"
@@ -70,16 +72,29 @@ start_timer() {
 
     stop_timer "true"
 
-    # Determine what systemd should inhibit based on config
+    # Determine what systemd-logind should inhibit based on config
     local inhibit_what="idle:sleep"
     if [[ "${BLOCK_LID,,}" == "true" ]]; then
         inhibit_what="idle:sleep:handle-lid-switch"
     fi
 
-    # 1. Start the background inhibitor process
+    # Start the background systemd-logind inhibitor process
     systemd-run --user \
-        --unit="${UNIT_NAME}-inhibitor" \
+        --unit="$INHIBITOR_UNIT" \
         systemd-inhibit --what="$inhibit_what" --who="expresso" --why="User requested" sleep infinity >/dev/null 2>&1
+
+    # Start the Wayland protocol inhibitor (Blocks Dim, DPMS, and Lock screen)
+    if [[ "${BLOCK_IDLE,,}" == "true" ]]; then
+        if command -v wayland-idle-inhibitor &>/dev/null; then
+            systemd-run --user \
+                --unit="$WAYLAND_INHIBITOR_UNIT" \
+                --setenv=WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" \
+                wayland-idle-inhibitor >/dev/null 2>&1
+        else
+            echo "Warning: wayland-idle-inhibitor not installed. Skipping idle block." >&2
+            notify-send -u critical -a "expresso" "Dependency Missing" "wayland-idle-inhibitor is required to block dim/lock."
+        fi
+    fi
 
     # Check for infinite mode
     if [[ "${duration,,}" == "infinite" || "${duration,,}" == "inf" ]]; then
@@ -92,19 +107,20 @@ start_timer() {
         duration="${duration}m"
     fi
 
-    # 2. Start the transient timer to kill the inhibitor when time is up
+    # Start the transient timer to kill the inhibitors when time is up
+    # We pass the stop_timer logic to the systemd service payload
     systemd-run --user \
         --unit="$UNIT_NAME" \
         --on-active="$duration" \
         --timer-property="AccuracySec=1s" \
-        systemctl --user stop "$INHIBITOR_UNIT" >/dev/null 2>&1
+        systemctl --user stop "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" >/dev/null 2>&1
 
     echo "Expresso started: System will stay awake for $duration."
     notify-send -a "expresso" "Expresso Active" "Sleep inhibition: $duration"
 }
 
 get_status() {
-    # Verify the inhibitor is actually running
+    # Verify the logind inhibitor is actually running
     local inhibitor_state
     inhibitor_state=$(systemctl --user is-active "$INHIBITOR_UNIT" 2>/dev/null || true)
 
