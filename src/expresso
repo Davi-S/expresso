@@ -9,7 +9,20 @@ TIMER_UNIT="${UNIT_NAME}.timer"
 SERVICE_UNIT="${UNIT_NAME}.service"
 INHIBITOR_UNIT="${UNIT_NAME}-inhibitor.service"
 
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/expresso"
+CONFIG_FILE="$CONFIG_DIR/expresso.conf"
+
+# --- Default Settings ---
+BLOCK_LID="false"
+
 # --- Functions ---
+
+load_config() {
+    # If the config file exists, source it to override defaults
+    if [[ -f "$CONFIG_FILE" ]]; then
+        source "$CONFIG_FILE"
+    fi
+}
 
 show_help() {
     cat <<EOF
@@ -52,13 +65,21 @@ start_timer() {
         exit 1
     fi
 
+    # Load user preferences from the config file before starting
+    load_config
+
     stop_timer "true"
 
+    # Determine what systemd should inhibit based on config
+    local inhibit_what="idle:sleep"
+    if [[ "${BLOCK_LID,,}" == "true" ]]; then
+        inhibit_what="idle:sleep:handle-lid-switch"
+    fi
+
     # 1. Start the background inhibitor process
-    # systemd-inhibit prevents logind from suspending or idling the system
     systemd-run --user \
         --unit="${UNIT_NAME}-inhibitor" \
-        systemd-inhibit --what=idle:sleep --who="expresso" --why="User requested" sleep infinity >/dev/null 2>&1
+        systemd-inhibit --what="$inhibit_what" --who="expresso" --why="User requested" sleep infinity >/dev/null 2>&1
 
     # Check for infinite mode
     if [[ "${duration,,}" == "infinite" || "${duration,,}" == "inf" ]]; then
