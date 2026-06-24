@@ -16,6 +16,7 @@ CONFIG_FILE="$CONFIG_DIR/expresso.conf"
 # --- Default Settings ---
 BLOCK_LID="false"
 BLOCK_IDLE="false"
+WAYLAND_INHIBITOR_CMD="wayland-idle-inhibitor.py"
 
 # --- Functions ---
 
@@ -73,9 +74,15 @@ start_timer() {
     stop_timer "true"
 
     # Determine what systemd-logind should inhibit based on config
-    local inhibit_what="idle:sleep"
+    # We ALWAYS block sleep, but the rest are optional
+    local inhibit_what="sleep"
+
     if [[ "${BLOCK_LID,,}" == "true" ]]; then
-        inhibit_what="idle:sleep:handle-lid-switch"
+        inhibit_what="${inhibit_what}:handle-lid-switch"
+    fi
+
+    if [[ "${BLOCK_IDLE,,}" == "true" ]]; then
+        inhibit_what="${inhibit_what}:idle"
     fi
 
     # Start the background systemd-logind inhibitor process
@@ -85,14 +92,18 @@ start_timer() {
 
     # Start the Wayland protocol inhibitor (Blocks Dim, DPMS, and Lock screen)
     if [[ "${BLOCK_IDLE,,}" == "true" ]]; then
-        if command -v wayland-idle-inhibitor &>/dev/null; then
+        # Extract just the command name in case arguments are added in the config
+        local cmd_name
+        cmd_name=$(echo "$WAYLAND_INHIBITOR_CMD" | awk '{print $1}')
+
+        if command -v "$cmd_name" &>/dev/null; then
             systemd-run --user \
                 --unit="$WAYLAND_INHIBITOR_UNIT" \
                 --setenv=WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" \
-                wayland-idle-inhibitor >/dev/null 2>&1
+                $WAYLAND_INHIBITOR_CMD >/dev/null 2>&1
         else
-            echo "Warning: wayland-idle-inhibitor not installed. Skipping idle block." >&2
-            notify-send -u critical -a "expresso" "Dependency Missing" "wayland-idle-inhibitor is required to block dim/lock."
+            echo "Warning: $cmd_name not installed or not in PATH." >&2
+            notify-send -u critical -a "expresso" "Dependency Missing" "Could not find '$cmd_name'. Check your config."
         fi
     fi
 
@@ -108,7 +119,6 @@ start_timer() {
     fi
 
     # Start the transient timer to kill the inhibitors when time is up
-    # We pass the stop_timer logic to the systemd service payload
     systemd-run --user \
         --unit="$UNIT_NAME" \
         --on-active="$duration" \
