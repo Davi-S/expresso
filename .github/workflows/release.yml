@@ -202,6 +202,11 @@ jobs:
       # failed": get the new line with `ssh-keyscan -t ed25519 aur.archlinux.org`,
       # check its fingerprint (`ssh-keygen -lf <file>`) against the AUR page,
       # and replace the line below.
+      #
+      # It also prints the fingerprint of the key in the secret (public
+      # information, safe to log). If publishing fails with "Permission denied
+      # (publickey)", compare it with `ssh-keygen -lf ~/.ssh/aur_ci.pub`, the key
+      # that must be saved on your AUR account. An invalid key fails here.
       - name: Set up build user and SSH
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
@@ -210,6 +215,8 @@ jobs:
           ssh_dir=/home/builder/.ssh
           install -d -m 700 "$ssh_dir"
           printf '%s\n' "$AUR_SSH_PRIVATE_KEY" >"$ssh_dir/aur"
+          chmod 600 "$ssh_dir/aur"
+          echo "AUR key in the secret: $(ssh-keygen -lf "$ssh_dir/aur")"
           echo 'aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN' >"$ssh_dir/known_hosts"
           printf '%s\n' \
             'Host aur.archlinux.org' \

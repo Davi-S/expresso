@@ -315,7 +315,7 @@ assert_notified() { # URGENCY TITLE BODY
     run --separate-stderr "$EXPRESSO" _wait
     assert_status 0
     assert_called sleep 60
-    [[ "$stderr" == "expresso: could not send a notification"* ]] || fail "stderr: $stderr"
+    assert_stderr "expresso: could not send a notification"$'\n'"expresso: cannot watch logind for resume; after a suspend, the lock may end late"
 }
 
 @test "_wait: missing or invalid lock values are a system error" {

@@ -83,7 +83,7 @@ setup() {
 @test "assertions fail with a message" {
     run --separate-stderr assert_equal "a" "b"
     assert_status 1
-    assert_equal "$stderr" $'expected:\nb\nactual:\na'
+    assert_stderr $'expected:\nb\nactual:\na'
 }
 
 @test "a --once rule answers one call, then the next rule applies" {

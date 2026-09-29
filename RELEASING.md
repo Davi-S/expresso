@@ -89,6 +89,11 @@ Use a separate key only for CI, so it can be revoked on its own.
 
 To revoke CI access, remove that public key from your AUR account.
 
+If publishing fails with `Permission denied (publickey)`, the AUR does not know
+the key in the secret. The "Set up build user and SSH" step logs that key's
+fingerprint; compare it with `ssh-keygen -lf ~/.ssh/aur_ci.pub`, and check that
+the public key is saved on your AUR account (the page needs "Update" clicked).
+
 ## Manual release
 
 Use this when Actions is down, the workflow is broken, or you want to bypass
