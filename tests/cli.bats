@@ -39,7 +39,7 @@ usage_hint="Try 'expresso --help' for more information."
 
 @test "commands without arguments reject arguments" {
     local cmd
-    for cmd in off status --help --version; do
+    for cmd in off status --help --version _wait _stopped; do
         run --separate-stderr "$EXPRESSO" "$cmd" extra
         assert_status 2
         assert_stderr "expresso: '$cmd' takes no arguments"$'\n'"$usage_hint"
@@ -214,4 +214,149 @@ assert_lock_started() {
     run --separate-stderr "$EXPRESSO" off
     assert_status 4
     assert_stderr "expresso: could not stop the lock"
+}
+
+# --- _wait (run by the unit, inside systemd-inhibit) -------------------------
+# 1759158600 is Mon 2025-09-29 15:10 UTC; tests run with TZ=UTC.
+
+readonly MONITOR_ARGS=(monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1)
+
+# lock_env DURATION STARTED LID IDLE: the environment the unit gives _wait.
+lock_env() {
+    export EXPRESSO_DURATION="$1" EXPRESSO_STARTED="$2" EXPRESSO_LID="$3" EXPRESSO_IDLE="$4"
+}
+
+# clock T1 T2 ... TN: successive `date +%s` answers; the last one repeats.
+clock() {
+    local -r times=("$@")
+    fake_now "${times[-1]}"
+    local i
+    for ((i = ${#times[@]} - 2; i >= 0; i--)); do
+        fake date --args "+%s" --stdout "${times[i]}" --once
+    done
+}
+
+assert_notified() { # URGENCY TITLE BODY
+    assert_called notify-send --app-name=expresso --expire-time=2000 "--urgency=$1" "$2" "$3"
+}
+
+@test "_wait: notifies that the lock is on" {
+    lock_env 1800 1759158600 false true
+    clock 1759158600 1759160400
+    run "$EXPRESSO" _wait
+    assert_status 0
+    assert_notified normal "Expresso on" "Until 15:40 · idle"
+}
+
+@test "_wait: waits until the deadline" {
+    # gdbus prints nothing, so only the timeout at the deadline ends the wait:
+    # a 1-second lock, so the test takes 1 second.
+    fake gdbus --hang
+    lock_env 1 1759158600 false false
+    clock 1759158600 1759158600 1759158601
+    SECONDS=0
+    run --separate-stderr "$EXPRESSO" _wait
+    assert_status 0
+    assert_stderr ""
+    ((SECONDS <= 3)) || fail "took $SECONDS s"
+    assert_called gdbus "${MONITOR_ARGS[@]}"
+    refute_called sleep
+    refute_hanging gdbus
+}
+
+@test "_wait: a logind signal (resume) rechecks the clock at once" {
+    lock_env 1800 1759158600 false false
+    fake gdbus --stdout "/org/freedesktop/login1: org.freedesktop.login1.Manager.PrepareForSleep (false,)" --hang
+    # After the signal the clock is past the deadline, as after a long suspend.
+    clock 1759158600 1759158600 1759200000
+    SECONDS=0
+    run --separate-stderr "$EXPRESSO" _wait
+    assert_status 0
+    assert_stderr ""
+    ((SECONDS <= 2)) || fail "took $SECONDS s: it waited instead of rechecking"
+    refute_called sleep
+    refute_hanging gdbus
+}
+
+@test "_wait: without the logind monitor, falls back to sleep and warns" {
+    lock_env 1800 1759158600 false false
+    # gdbus exits at once (no rule), like when the system bus is unreachable.
+    # Clock reads: notification, first check, recheck after the monitor died,
+    # after the sleep.
+    clock 1759158600 1759158600 1759158600 1759160400
+    run --separate-stderr "$EXPRESSO" _wait
+    assert_status 0
+    assert_stderr "expresso: cannot watch logind for resume; after a suspend, the lock may end late"
+    assert_called sleep 1800
+}
+
+@test "_wait: returns at once when the deadline already passed" {
+    lock_env 60 1759158600 false false
+    clock 1759200000
+    run "$EXPRESSO" _wait
+    assert_status 0
+    refute_called sleep
+}
+
+@test "_wait: an indefinite lock sleeps forever without the monitor" {
+    lock_env 0 1759158600 true false
+    clock 1759158600
+    run "$EXPRESSO" _wait
+    assert_status 0
+    assert_notified normal "Expresso on" "Indefinitely · lid"
+    assert_called sleep infinity
+    refute_called gdbus
+}
+
+@test "_wait: a failed notification does not end the lock" {
+    lock_env 60 1759158600 false false
+    fake notify-send --exit 1
+    clock 1759158600 1759158600 1759158600 1759158660
+    run --separate-stderr "$EXPRESSO" _wait
+    assert_status 0
+    assert_called sleep 60
+    [[ "$stderr" == "expresso: could not send a notification"* ]] || fail "stderr: $stderr"
+}
+
+@test "_wait: missing or invalid lock values are a system error" {
+    run --separate-stderr "$EXPRESSO" _wait
+    assert_status 4
+    assert_stderr "expresso: missing or invalid EXPRESSO_* variables; '_wait' is run by the lock unit"
+    refute_called notify-send
+
+    lock_env 60m 1759158600 false false
+    run "$EXPRESSO" _wait
+    assert_status 4
+}
+
+# --- _stopped (the unit's ExecStopPost) --------------------------------------
+
+@test "_stopped: time's up" {
+    EXIT_CODE=exited EXIT_STATUS=0 run "$EXPRESSO" _stopped
+    assert_status 0
+    assert_notified normal "Expresso off" "Time's up"
+}
+
+@test "_stopped: turned off" {
+    EXIT_CODE=killed EXIT_STATUS=TERM run "$EXPRESSO" _stopped
+    assert_status 0
+    assert_notified normal "Expresso off" "Turned off"
+}
+
+@test "_stopped: failed" {
+    EXIT_CODE=exited EXIT_STATUS=1 run "$EXPRESSO" _stopped
+    assert_status 0
+    assert_notified critical "Expresso failed" "Could not take the lock. See: journalctl --user -u app-expresso"
+}
+
+@test "_stopped: no exit information counts as failed" {
+    run "$EXPRESSO" _stopped
+    assert_notified critical "Expresso failed" "Could not take the lock. See: journalctl --user -u app-expresso"
+}
+
+@test "_stopped: a failed notification is a system error" {
+    fake notify-send --exit 1
+    EXIT_CODE=exited EXIT_STATUS=0 run --separate-stderr "$EXPRESSO" _stopped
+    assert_status 4
+    assert_stderr "expresso: could not send a notification"
 }

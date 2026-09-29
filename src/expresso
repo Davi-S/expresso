@@ -37,6 +37,11 @@ readonly MAX_DURATION=2147483647
 # The systemd user unit that holds the lock. It exists only while a lock is on.
 readonly UNIT="app-expresso.service"
 
+# Watches logind's signals. The one that matters is PrepareForSleep(false),
+# sent on resume; any signal only makes the waiter recheck the clock.
+readonly LOGIND_MONITOR=(gdbus monitor --system
+    --dest org.freedesktop.login1 --object-path /org/freedesktop/login1)
+
 # This script's absolute path, for the unit to run `_wait` and `_stopped`.
 SELF="${BASH_SOURCE[0]}"
 [[ "$SELF" == /* ]] || SELF="$PWD/$SELF"
@@ -88,6 +93,17 @@ inhibit_what() {
     printf '%s\n' "$what"
 }
 
+# parse_lock_values DURATION STARTED LID IDLE
+# Validate a lock's values, as stored in the unit's environment. Prints them
+# space-separated, in this order.
+parse_lock_values() {
+    is_duration "$1" || return 1
+    is_timestamp "$2" || return 1
+    is_bool "$3" || return 1
+    is_bool "$4" || return 1
+    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4"
+}
+
 # parse_unit_properties TEXT
 # Parse the output of `systemctl show --property=ActiveState --property=Environment`.
 # Prints "inactive", or "active DURATION STARTED LID IDLE" for a running lock.
@@ -116,11 +132,9 @@ parse_unit_properties() {
         EXPRESSO_IDLE=*) idle="${variable#*=}" ;;
         esac
     done
-    is_duration "$duration" || return 1
-    is_timestamp "$started" || return 1
-    is_bool "$lid" || return 1
-    is_bool "$idle" || return 1
-    printf 'active %s %s %s %s\n' "$duration" "$started" "$lid" "$idle"
+    local values
+    values="$(parse_lock_values "$duration" "$started" "$lid" "$idle")" || return 1
+    printf 'active %s\n' "$values"
 }
 
 # format_status DURATION STARTED LID IDLE NOW
@@ -143,6 +157,54 @@ format_status() {
         "remaining=$remaining" \
         "lid=$lid" \
         "idle=$idle"
+}
+
+# format_until DEADLINE NOW
+# Print when a lock ends, for a notification: the time if it is today, the
+# weekday and time within 6 days, the full date otherwise. Always in English.
+format_until() {
+    local -r deadline="$1" now="$2"
+    local LC_ALL=C deadline_day now_day
+    printf -v deadline_day '%(%F)T' "$deadline"
+    printf -v now_day '%(%F)T' "$now"
+    if [[ "$deadline_day" == "$now_day" ]]; then
+        printf '%(Until %H:%M)T\n' "$deadline"
+    elif ((deadline - now < 6 * 86400)); then
+        printf '%(Until %a %H:%M)T\n' "$deadline"
+    else
+        printf '%(Until %F %H:%M)T\n' "$deadline"
+    fi
+}
+
+# describe_lock DURATION STARTED LID IDLE NOW
+# Print the body of the "Expresso on" notification, e.g. "Until 15:40 · lid, idle".
+describe_lock() {
+    local -r duration="$1" started="$2" lid="$3" idle="$4" now="$5"
+    local text flags=""
+    if ((duration == 0)); then
+        text="Indefinitely"
+    else
+        text="$(format_until $((started + duration)) "$now")"
+    fi
+    if [[ "$lid" == true ]]; then
+        flags="lid"
+    fi
+    if [[ "$idle" == true ]]; then
+        flags="${flags:+$flags, }idle"
+    fi
+    printf '%s%s\n' "$text" "${flags:+ · $flags}"
+}
+
+# stop_reason EXIT_CODE EXIT_STATUS
+# Map systemd's exit information for the unit's main process to why the lock
+# ended: "timeout" (the waiter finished), "stopped" (it was killed, as by
+# `expresso off`) or "failed" (anything else, including no information).
+stop_reason() {
+    case "$1:$2" in
+    exited:0) printf 'timeout\n' ;;
+    killed:*) printf 'stopped\n' ;;
+    *) printf 'failed\n' ;;
+    esac
 }
 
 # --- system ------------------------------------------------------------------
@@ -211,6 +273,74 @@ sys_unit_stop() {
     }
 }
 
+# sys_lock_env
+# Print the lock's values from the environment the unit gives `_wait`:
+# "DURATION STARTED LID IDLE".
+sys_lock_env() {
+    parse_lock_values "${EXPRESSO_DURATION-}" "${EXPRESSO_STARTED-}" \
+        "${EXPRESSO_LID-}" "${EXPRESSO_IDLE-}" || {
+        err "missing or invalid EXPRESSO_* variables; '_wait' is run by the lock unit"
+        return "$EXIT_SYSTEM"
+    }
+}
+
+# sys_stop_reason
+# Print why the unit's main process ended, from the variables systemd gives
+# ExecStopPost: see stop_reason.
+sys_stop_reason() {
+    stop_reason "${EXIT_CODE-}" "${EXIT_STATUS-}"
+}
+
+# sys_notify URGENCY TITLE BODY
+sys_notify() {
+    notify-send --app-name=expresso --expire-time=2000 --urgency="$1" "$2" "$3" || {
+        err "could not send a notification"
+        return "$EXIT_SYSTEM"
+    }
+}
+
+# sys_wait_until DEADLINE
+# Return once the wall clock reaches DEADLINE, including right after a resume
+# from suspend, when `sleep` alone would be late (it doesn't count suspended time).
+sys_wait_until() {
+    local -r deadline="$1"
+    local now fd line watching=true
+    local -i code=0 status
+
+    # Started before the first clock check, so no resume can be missed.
+    exec {fd}< <(exec "${LOGIND_MONITOR[@]}")
+    local -r monitor_pid=$!
+
+    while true; do
+        now="$(sys_now)" || {
+            code=$?
+            break
+        }
+        ((now < deadline)) || break
+        if [[ "$watching" == true ]]; then
+            # Returns on a logind signal (status 0), at the deadline (> 128),
+            # or at once if the monitor died (1).
+            status=0
+            read -r -t "$((deadline - now))" -u "$fd" line || status=$?
+            if ((status > 0 && status <= 128)); then
+                watching=false
+                err "cannot watch logind for resume; after a suspend, the lock may end late"
+            fi
+        else
+            sleep "$((deadline - now))" || true
+        fi
+    done
+
+    kill "$monitor_pid" 2>/dev/null || true
+    exec {fd}<&-
+    return "$code"
+}
+
+# sys_wait_forever: return only when killed.
+sys_wait_forever() {
+    sleep infinity
+}
+
 # --- core --------------------------------------------------------------------
 
 # core_on DURATION LID IDLE
@@ -242,6 +372,34 @@ core_status() {
     read -r _ duration started lid idle <<<"$state"
     now="$(sys_now)" || return
     format_status "$duration" "$started" "$lid" "$idle" "$now"
+}
+
+# core_wait
+# Run by the unit inside systemd-inhibit, so the lock is held while this runs.
+# Announces the lock, then holds it until the deadline.
+core_wait() {
+    local values duration started lid idle now body
+    values="$(sys_lock_env)" || return
+    read -r duration started lid idle <<<"$values"
+    now="$(sys_now)" || return
+    body="$(describe_lock "$duration" "$started" "$lid" "$idle" "$now")"
+    # Holding the lock matters more than announcing it.
+    sys_notify normal "Expresso on" "$body" || true
+    if ((duration == 0)); then
+        sys_wait_forever
+    else
+        sys_wait_until $((started + duration))
+    fi
+}
+
+# core_stopped
+# Run by systemd after the unit stops, for any reason: announces how it ended.
+core_stopped() {
+    case "$(sys_stop_reason)" in
+    timeout) sys_notify normal "Expresso off" "Time's up" ;;
+    stopped) sys_notify normal "Expresso off" "Turned off" ;;
+    *) sys_notify critical "Expresso failed" "Could not take the lock. See: journalctl --user -u ${UNIT%.service}" ;;
+    esac
 }
 
 # --- cli ---------------------------------------------------------------------
@@ -358,6 +516,15 @@ main() {
     --version)
         cli_no_args "$command" "$@" || return
         printf 'expresso %s\n' "$VERSION"
+        ;;
+    # Internal: run by the lock unit, not by users (see docs/DESIGN.md).
+    _wait)
+        cli_no_args "$command" "$@" || return
+        core_wait
+        ;;
+    _stopped)
+        cli_no_args "$command" "$@" || return
+        core_stopped
         ;;
     *) usage_error "unknown command '$command'" ;;
     esac

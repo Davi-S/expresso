@@ -17,9 +17,11 @@ EXPRESSO="$PROJECT_ROOT/src/expresso"
 # Every external command expresso may call. Each is replaced by the fake in
 # tests/fakes/fake, so a test can never touch the real system. When expresso
 # starts using a new external command, add it here.
-FAKED_COMMANDS=(systemd-run systemctl systemd-inhibit date gdbus notify-send)
+FAKED_COMMANDS=(systemd-run systemctl systemd-inhibit date gdbus notify-send sleep)
 
 common_setup() {
+    # Times in notifications are formatted in UTC, so expectations are fixed.
+    export TZ=UTC
     export FAKE_DIR="$BATS_TEST_TMPDIR/fake"
     mkdir -p "$FAKE_DIR/bin" "$FAKE_DIR/rules"
     : >"$FAKE_DIR/calls.log"
@@ -33,27 +35,32 @@ common_setup() {
 
 # --- Fakes -------------------------------------------------------------------
 
-# fake CMD [--args PATTERN] [--stdout TEXT] [--exit CODE]
+# fake CMD [--args PATTERN] [--stdout TEXT] [--exit CODE] [--once] [--hang]
 #
 # Register how the fake CMD answers. PATTERN is a glob matched against all its
 # arguments joined by spaces (default: '*', any call). When several rules
 # match, the one registered last wins, so a test can override a default set in
 # setup(). TEXT is printed followed by a newline.
+#   --once  the rule answers a single call, then is removed. Register the
+#           later answer first: `fake date --stdout 2`, `fake date --stdout 1 --once`.
+#   --hang  after printing, keep running until killed (like `gdbus monitor`).
 fake() {
     local -r cmd="$1"
     shift
-    local pattern='*' stdout='' has_stdout=false code=0
+    local pattern='*' stdout='' has_stdout=false code=0 once=false hang=false
     while (($# > 0)); do
         case "$1" in
-        --args) pattern="$2" ;;
-        --stdout) stdout="$2" has_stdout=true ;;
-        --exit) code="$2" ;;
+        --args) pattern="$2" && shift ;;
+        --stdout) stdout="$2" has_stdout=true && shift ;;
+        --exit) code="$2" && shift ;;
+        --once) once=true ;;
+        --hang) hang=true ;;
         *)
             echo "fake: unknown option '$1'" >&2
             return 1
             ;;
         esac
-        shift 2
+        shift
     done
 
     local -r dir="$FAKE_DIR/rules/$cmd"
@@ -63,6 +70,8 @@ fake() {
     mkdir "$rule"
     printf '%s' "$pattern" >"$rule/pattern"
     printf '%s' "$code" >"$rule/exit"
+    [[ "$once" == false ]] || : >"$rule/once"
+    [[ "$hang" == false ]] || : >"$rule/hang"
     if [[ "$has_stdout" == true ]]; then
         printf '%s\n' "$stdout" >"$rule/stdout"
     else
@@ -77,6 +86,19 @@ calls() {
     else
         grep -E "^$1( |\$)" "$FAKE_DIR/calls.log" || true
     fi
+}
+
+# refute_hanging CMD: no fake CMD started with --hang is still running.
+refute_hanging() {
+    local -r file="$FAKE_DIR/$1.hanging"
+    [[ -e "$file" ]] || fail "no hanging $1 was ever started"
+    local pid
+    while read -r pid; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            fail "$1 (PID $pid) was left running"
+        fi
+    done <"$file"
 }
 
 # --- Assertions --------------------------------------------------------------

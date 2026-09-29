@@ -199,3 +199,69 @@ usage_hint="Try 'expresso --help' for more information."
         assert_output ""
     done
 }
+
+# --- parse_lock_values -------------------------------------------------------
+
+@test "parse_lock_values accepts valid values and prints them" {
+    run parse_lock_values 1800 1759158600 false true
+    assert_status 0
+    assert_output "1800 1759158600 false true"
+}
+
+@test "parse_lock_values rejects any invalid value" {
+    local values
+    for values in "60m 1 false false" "60 x false false" "60 1 yes false" \
+        "60 1 false 1" " 1 false false"; do
+        # shellcheck disable=SC2086 # split into four arguments on purpose
+        run parse_lock_values $values
+        assert_status 1
+    done
+    run parse_lock_values "" "" "" ""
+    assert_status 1
+}
+
+# --- format_until, describe_lock ---------------------------------------------
+# 1759158600 is Mon 2025-09-29 15:10 UTC; tests run with TZ=UTC.
+
+@test "format_until: time only when the deadline is today" {
+    assert_equal "$(format_until 1759160400 1759158600)" "Until 15:40"
+}
+
+@test "format_until: weekday when the deadline is within 6 days" {
+    assert_equal "$(format_until 1759421400 1759158600)" "Until Thu 16:10"
+}
+
+@test "format_until: full date when the deadline is further away" {
+    assert_equal "$(format_until 1761750600 1759158600)" "Until 2025-10-29 15:10"
+}
+
+@test "format_until: English weekdays whatever the locale" {
+    local -r locale="$(locale -a 2>/dev/null | grep -iE '^(pt_BR|de_DE|fr_FR)\.utf-?8$' | head -1)"
+    [[ -n "$locale" ]] || skip "no non-English locale installed"
+    LC_ALL="$locale"
+    assert_equal "$(format_until 1759421400 1759158600)" "Until Thu 16:10"
+}
+
+@test "describe_lock: deadline plus the extras that are on" {
+    assert_equal "$(describe_lock 1800 1759158600 false false 1759158600)" "Until 15:40"
+    assert_equal "$(describe_lock 1800 1759158600 true false 1759158600)" "Until 15:40 · lid"
+    assert_equal "$(describe_lock 1800 1759158600 false true 1759158600)" "Until 15:40 · idle"
+    assert_equal "$(describe_lock 1800 1759158600 true true 1759158600)" "Until 15:40 · lid, idle"
+}
+
+@test "describe_lock: indefinite" {
+    assert_equal "$(describe_lock 0 1759158600 false false 1759158600)" "Indefinitely"
+    assert_equal "$(describe_lock 0 1759158600 true true 1759158600)" "Indefinitely · lid, idle"
+}
+
+# --- stop_reason -------------------------------------------------------------
+
+@test "stop_reason maps systemd's exit information to why the lock ended" {
+    assert_equal "$(stop_reason exited 0)" "timeout"
+    assert_equal "$(stop_reason killed TERM)" "stopped"
+    assert_equal "$(stop_reason killed KILL)" "stopped"
+    assert_equal "$(stop_reason exited 1)" "failed"
+    assert_equal "$(stop_reason exited 4)" "failed"
+    assert_equal "$(stop_reason dumped SEGV)" "failed"
+    assert_equal "$(stop_reason "" "")" "failed"
+}

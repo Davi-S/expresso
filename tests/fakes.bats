@@ -85,3 +85,25 @@ setup() {
     assert_status 1
     assert_equal "$stderr" $'expected:\nb\nactual:\na'
 }
+
+@test "a --once rule answers one call, then the next rule applies" {
+    fake date --stdout "2000"
+    fake date --stdout "1000" --once
+    assert_equal "$(date +%s)" "1000"
+    assert_equal "$(date +%s)" "2000"
+    assert_equal "$(date +%s)" "2000"
+}
+
+@test "a --hang rule prints, then runs until killed" {
+    fake gdbus --stdout "signal" --hang
+    local line fd
+    exec {fd}< <(gdbus monitor)
+    local -r pid=$!
+    read -r -t 5 -u "$fd" line || fail "no line printed"
+    assert_equal "$line" "signal"
+    kill -0 "$pid" || fail "exited instead of hanging"
+    run refute_hanging gdbus
+    assert_status 1
+    refute_hanging gdbus # the failed check above killed it
+    exec {fd}<&-
+}

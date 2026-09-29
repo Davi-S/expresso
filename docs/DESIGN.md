@@ -109,30 +109,38 @@ expresso on 1800 --idle
 Exact at the deadline, including after suspend, with a single unit:
 
 ```
+start `gdbus monitor` on logind (before the first clock check, so no resume is missed)
 loop:
   now ≥ deadline → exit 0
-  sleep <deadline − now>            ─┐ whichever finishes first,
-  gdbus monitor (logind signals)   ─┘ then loop
+  read one line from the monitor, with a timeout of (deadline − now) seconds
+    line    → a logind signal (PrepareForSleep(false) on resume): recheck the clock
+    timeout → the deadline, measured while awake: recheck the clock
+    EOF     → the monitor died: warn in the journal, then use `sleep` instead
+              (still exact while awake, but may end late after a suspend)
+stop the monitor
 ```
 
-- While awake, `sleep` ends exactly at the deadline.
-- On resume, logind's `PrepareForSleep` signal wakes the waiter within milliseconds,
-  so a lock whose deadline passed during suspend ends immediately.
-- Indefinite (`duration=0`): no deadline, just wait until stopped.
+- `read -t` on the monitor's output is both the timer and the resume listener,
+  so no separate `sleep` process is needed while the monitor runs.
+- Indefinite (`duration=0`): `sleep infinity`, no monitor; it ends when stopped.
+- Timestamps are whole seconds, and STARTED is rounded down, so a lock can
+  end up to 1 second before exactly DURATION seconds after `on`.
+- Measured on real systemd: a lock ends within its deadline second.
 - Known limit: a large wall-clock change while awake (manual clock set) is only
-  noticed when the current `sleep` ends.
+  noticed at the next logind signal or at the current timeout.
 
 ### Notifications
 
-Sent only by the unit (`_wait` and `_stopped`). Separate notifications with a
-2-second timeout, no replacing.
+Sent only by the unit (`_wait` and `_stopped`), with `notify-send
+--app-name=expresso --expire-time=2000`. Separate notifications, no replacing.
+If the "started" notification fails, the lock is kept (holding it matters more).
 
 | Event | Detected by | Title | Body |
 |---|---|---|---|
-| Started | `_wait` starts (lock is held) | Expresso on | `Until 15:30` / `Until Tue 09:00` (not today) / `Indefinitely`, plus ` · lid, idle` when set |
+| Started | `_wait` starts (lock is held) | Expresso on | `Until 15:30` (today) / `Until Tue 09:00` (within 6 days) / `Until 2025-10-29 15:10` / `Indefinitely`, plus ` · lid, idle` when set. Always English. |
 | Time's up | `EXIT_CODE=exited`, `EXIT_STATUS=0` | Expresso off | `Time's up` |
-| Turned off | `EXIT_CODE=killed` | Expresso off | `Turned off` |
-| Failed | `EXIT_CODE=exited`, non-zero status | Expresso failed | `Could not take the lock. See: journalctl --user -u app-expresso` (critical) |
+| Turned off | `EXIT_CODE=killed` (any signal) | Expresso off | `Turned off` |
+| Failed | anything else: non-zero exit, core dump, no information | Expresso failed | `Could not take the lock. See: journalctl --user -u app-expresso` (critical) |
 
 ## Code structure
 
