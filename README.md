@@ -34,7 +34,18 @@ clean, integrated Rofi GUI.
 ### Arch Linux (AUR)
 
 ```bash
-paru -Syu expresso
+paru -S expresso
+```
+
+### From source
+
+Dependencies: `bash`, `systemd`, `rofi`, `libnotify`, `make`.
+
+```bash
+git clone https://github.com/Davi-S/expresso.git
+cd expresso
+sudo make install              # installs to /usr/local; use PREFIX=/usr to change
+sudo make uninstall            # to remove
 ```
 
 ## Configuration
@@ -45,11 +56,10 @@ features like lid-blocking and idle-blocking, create a configuration file at
 
 ```bash
 mkdir -p ~/.config/expresso
-touch ~/.config/expresso/expresso.conf
-
+cp /usr/share/doc/expresso/expresso.conf.example ~/.config/expresso/expresso.conf
 ```
 
-Add the following variables to customize the behavior:
+The example is also in [`examples/expresso.conf`](examples/expresso.conf). Available settings:
 
 ```bash
 # ~/.config/expresso/expresso.conf
@@ -71,7 +81,6 @@ To open the interactive menu, run:
 
 ```bash
 expresso menu
-
 ```
 
 ### Command Line Interface
@@ -93,6 +102,17 @@ expresso status
 
 # Cancel the lock and allow the system to sleep normally again
 expresso stop
-
 ```
+
+See `man expresso` for the full reference.
+
+## Development
+
+- `make check` runs `shellcheck` and `shfmt`, the same checks as CI.
+- Record changes under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+- Releases and AUR publishing are described in [`RELEASING.md`](RELEASING.md).
+
+## License
+
+[MIT](LICENSE)
 

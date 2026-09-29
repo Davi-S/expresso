@@ -1,0 +1,78 @@
+.TH EXPRESSO 1 "2026-09-29" "expresso" "User Commands"
+.SH NAME
+expresso \- keep the system awake for a while, or indefinitely
+.SH SYNOPSIS
+.B expresso
+.I command
+.RI [ argument ]
+.SH DESCRIPTION
+.B expresso
+temporarily prevents the system from sleeping, using
+.BR systemd-inhibit (1)
+and transient
+.BR systemd-run (1)
+user units. It can be driven from the command line or through a
+.BR rofi (1)
+menu.
+.SH COMMANDS
+.TP
+.BI start " time"
+Start keeping the system awake. A bare number is taken as minutes.
+Accepted forms include
+.BR 15 ,
+.BR 15m ,
+.BR 90s ,
+.BR 2h ,
+and
+.B inf
+or
+.B infinite
+for no time limit. Starting again replaces the current lock.
+.TP
+.B stop
+Cancel the active lock.
+.TP
+.B status
+Print the time remaining,
+.BR Infinite ,
+or
+.BR Inactive .
+.TP
+.B menu
+Open the interactive rofi menu.
+.TP
+.BR version ", " \-\-version ", " \-V
+Print the version.
+.TP
+.BR help ", " \-\-help ", " \-h
+Print usage information.
+.SH CONFIGURATION
+Settings are read from
+.IR $XDG_CONFIG_HOME/expresso/expresso.conf
+(default
+.IR ~/.config/expresso/expresso.conf ).
+.TP
+.B BLOCK_LID="true"
+Also inhibit the laptop lid switch.
+.TP
+.B BLOCK_IDLE="true"
+Also prevent Wayland idle daemons from dimming or locking the screen.
+Requires
+.BR wayland-idle-inhibitor.py .
+.PP
+An example is installed at
+.IR /usr/share/doc/expresso/expresso.conf.example .
+.SH EXAMPLES
+.nf
+expresso start 30
+expresso start 2h
+expresso start inf
+expresso status
+expresso stop
+.fi
+.SH SEE ALSO
+.BR systemd-inhibit (1),
+.BR systemd-run (1),
+.BR rofi (1)
+.SH BUGS
+Report issues at https://github.com/Davi-S/expresso/issues
