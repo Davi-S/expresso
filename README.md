@@ -1,33 +1,22 @@
 # Expresso
 
-A lightweight system-awake utility for Linux.
+Keep your Linux system awake for a while, from the command line or your scripts.
 
-`expresso` is a minimal and fast alternative to the classic "Caffeine" utility.
-It allows you to temporarily (or indefinitely) block your system from going to
-sleep or entering idle states. It features a fully-fledged CLI backend and a
-clean, integrated Rofi GUI.
+`expresso on 1800` holds a lock that keeps the system from suspending for 30
+minutes. `expresso off` releases it. `expresso status` tells a script whether a
+lock is on and how long it has left.
 
-### Features
-
-- **OS-Native Inhibition:** Uses `systemd-inhibit` to natively interface with
-  your system's login manager (`logind`).
-- **Advanced State Management:** Optionally block laptop lid-close events, or
-  prevent Wayland idle daemons from dimming or locking your screen.
-- **Infinite or Timed:** Keep your system awake indefinitely, or schedule the
-  inhibitor to automatically disable itself after a set amount of time using
-  transient `systemd` timers.
-- **Integrated Frontend & Backend:** A single, clean Bash script manages both
-  the CLI logic and the Rofi graphical interface.
-- **Smart Notifications:** Native system notifications via `notify-send` for
-  activation, cancellation, and errors.
-
-## Requirements
-
-- **`systemd`**: For system inhibition and timer management.
-- **`rofi`**: For the graphical menu.
-- **`libnotify`**: For `notify-send` desktop notifications.
-- **`wayland-idle-inhibitor`**: Required only if you want to block screen
-  dimming, DPMS, and lock screens.
+- **Native.** The lock is a `systemd-inhibit` inhibitor held by a transient
+  systemd user unit. When the unit stops, for any reason, the lock is gone:
+  nothing can leak.
+- **Exact.** A lock ends at its wall-clock deadline, even if the system was
+  suspended past it: it ends as soon as the system resumes.
+- **Scriptable.** stdout is data only, errors go to stderr, and every outcome
+  has its own exit status.
+- **Optional extras.** `--lid` keeps closing the lid from suspending; `--idle`
+  keeps idle daemons such as hypridle from dimming, locking or turning off the
+  screen.
+- **Notifications** when a lock starts, ends or fails.
 
 ## Installation
 
@@ -39,7 +28,8 @@ paru -S expresso
 
 ### From source
 
-Dependencies: `bash`, `systemd`, `rofi`, `libnotify`, `make`.
+Dependencies: `bash`, `systemd`, `glib2` (for `gdbus`), `libnotify`, and `make`
+to install.
 
 ```bash
 git clone https://github.com/Davi-S/expresso.git
@@ -48,63 +38,70 @@ sudo make install              # installs to /usr/local; use PREFIX=/usr to chan
 sudo make uninstall            # to remove
 ```
 
-## Configuration
-
-`expresso` works out of the box to prevent system suspension. To enable advanced
-features like lid-blocking and idle-blocking, create a configuration file at
-`~/.config/expresso/expresso.conf`.
-
-```bash
-mkdir -p ~/.config/expresso
-cp /usr/share/doc/expresso/expresso.conf.example ~/.config/expresso/expresso.conf
-```
-
-The example is also in [`examples/expresso.conf`](examples/expresso.conf). Available settings:
-
-```bash
-# ~/.config/expresso/expresso.conf
-
-# Set to "true" to prevent the system from sleeping when the laptop lid is closed
-BLOCK_LID="false"
-
-# Set to "true" to prevent Wayland idle daemons (like hypridle) from dimming or locking the screen
-BLOCK_IDLE="false"
-```
-
 ## Usage
 
-`expresso` functions as both a CLI tool and a GUI launcher.
-
-### Graphical Interface (Rofi)
-
-To open the interactive menu, run:
-
-```bash
-expresso menu
 ```
-
-### Command Line Interface
-
-You can interact with the backend directly from your terminal or custom scripts:
-
-```bash
-# Start a caffeine lock (defaults to minutes if no unit is provided)
-expresso start 15     # Stays awake for 15 minutes
-expresso start 2h     # Stays awake for 2 hours
-
-# Keep the system awake indefinitely
-expresso start inf
-
-# Check the status of an active lock
+expresso on DURATION [--lid] [--idle]
+expresso off
 expresso status
-#> 14m
-#> Infinite
-
-# Cancel the lock and allow the system to sleep normally again
-expresso stop
 ```
 
-See `man expresso` for the full reference.
+`DURATION` is in seconds; `0` means until `off`.
+
+```bash
+expresso on 2700              # 45 minutes
+expresso on 0 --idle          # until turned off, and keep the screen on
+expresso on 3600 --lid        # 1 hour, even with the lid closed
+expresso off
+```
+
+`status` prints `key=value` lines and exits 0 when a lock is on, 1 when not:
+
+```console
+$ expresso status
+state=on
+duration=2700
+started=1759158600
+until=1759161300
+remaining=2412
+lid=false
+idle=false
+$ expresso off && expresso status
+state=off
+```
+
+`until` and `remaining` are `infinity` for a lock started with `on 0`.
+
+### Exit status
+
+| Code | Meaning |
+|---|---|
+| 0 | Success; for `status`, a lock is on |
+| 1 | No lock is on (`status`, `off`) |
+| 2 | Usage error |
+| 3 | A lock is already on (`on`) |
+| 4 | System error |
+
+### Scripting
+
+There is no configuration file: put your preferred flags in a keybinding,
+alias or script.
+
+```bash
+# Toggle, e.g. bound to a key
+expresso off 2>/dev/null || expresso on 3600 --idle
+
+# Seconds left, or "infinity"
+expresso status | sed -n 's/^remaining=//p'
+
+# Read every value
+while IFS='=' read -r key value; do
+    printf '%s -> %s\n' "$key" "$value"
+done < <(expresso status)
+```
+
+See `man expresso` for the full reference, including how suspend and the lid
+behave.
 
 ## Development
 
@@ -112,10 +109,10 @@ See `man expresso` for the full reference.
   (needs `bats`: `pacman -S bash-bats`). CI runs both on every push.
 - `make integration` tests against your real systemd session; run it before a
   release (`SUSPEND=1` adds a suspend/resume check).
+- The design and the reasons behind it are in [`docs/DESIGN.md`](docs/DESIGN.md).
 - Record changes under `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
 - Releases and AUR publishing are described in [`RELEASING.md`](RELEASING.md).
 
 ## License
 
 [MIT](LICENSE)
-

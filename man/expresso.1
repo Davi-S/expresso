@@ -1,78 +1,215 @@
 .TH EXPRESSO 1 "2026-09-29" "expresso" "User Commands"
 .SH NAME
-expresso \- keep the system awake for a while, or indefinitely
+expresso \- keep the system awake for a while
 .SH SYNOPSIS
+.B expresso on
+.I DURATION
+.RB [ \-\-lid ]
+.RB [ \-\-idle ]
+.br
+.B expresso off
+.br
+.B expresso status
+.br
 .B expresso
-.I command
-.RI [ argument ]
+.BR \-\-help " | " \-\-version
 .SH DESCRIPTION
 .B expresso
-temporarily prevents the system from sleeping, using
-.BR systemd-inhibit (1)
-and transient
-.BR systemd-run (1)
-user units. It can be driven from the command line or through a
-.BR rofi (1)
-menu.
+holds a lock that keeps the system from suspending, for a given number of
+seconds or until turned off.
+It is meant to be scripted: output on stdout is data only, messages go to
+stderr, and every outcome has its own exit status.
+.PP
+A lock is a transient systemd user unit,
+.BR app-expresso.service ,
+running
+.BR systemd-inhibit (1).
+While the unit runs, the lock is held; there is no other state.
+Each user has at most one lock, shared by all their sessions.
 .SH COMMANDS
 .TP
-.BI start " time"
-Start keeping the system awake. A bare number is taken as minutes.
-Accepted forms include
-.BR 15 ,
-.BR 15m ,
-.BR 90s ,
-.BR 2h ,
-and
-.B inf
-or
-.B infinite
-for no time limit. Starting again replaces the current lock.
+.BI on " DURATION"
+Take the lock for
+.I DURATION
+seconds, or until
+.B off
+if
+.I DURATION
+is 0.
+.I DURATION
+is a whole number from 0 to 2147483647, without sign or leading zeros.
+Fails if a lock is already on.
+.RS
 .TP
-.B stop
-Cancel the active lock.
+.B \-\-lid
+Also keep closing the laptop lid from suspending the system.
+.TP
+.B \-\-idle
+Also keep idle daemons, such as
+.BR hypridle ,
+from dimming, locking or turning off the screen.
+.RE
+.IP
+The flags can appear in any order, each at most once.
+.TP
+.B off
+Release the lock. Returns once it is fully released.
 .TP
 .B status
-Print the time remaining,
-.BR Infinite ,
-or
-.BR Inactive .
+Print the lock's state; see
+.BR "STATUS OUTPUT" .
 .TP
-.B menu
-Open the interactive rofi menu.
+.B \-\-help
+Print a usage summary.
 .TP
-.BR version ", " \-\-version ", " \-V
+.B \-\-version
 Print the version.
+.SH STATUS OUTPUT
+.B status
+prints
+.IB key = value
+lines.
+When no lock is on, the only line is
+.BR state=off .
+When a lock is on, all of these keys are printed, in this order:
 .TP
-.BR help ", " \-\-help ", " \-h
-Print usage information.
-.SH CONFIGURATION
-Settings are read from
-.IR $XDG_CONFIG_HOME/expresso/expresso.conf
-(default
-.IR ~/.config/expresso/expresso.conf ).
+.B state
+.BR on .
 .TP
-.B BLOCK_LID="true"
-Also inhibit the laptop lid switch.
+.B duration
+The
+.I DURATION
+given to
+.BR on ;
+0 for an indefinite lock.
 .TP
-.B BLOCK_IDLE="true"
-Also prevent Wayland idle daemons from dimming or locking the screen.
-Requires
-.BR wayland-idle-inhibitor.py .
+.B started
+When the lock was taken, as a Unix timestamp.
+.TP
+.B until
+When it ends, as a Unix timestamp, or
+.B infinity
+for an indefinite lock.
+.TP
+.B remaining
+Seconds until it ends, or
+.BR infinity .
+.TP
+.BR lid ", " idle
+.B true
+or
+.BR false :
+whether
+.B \-\-lid
+and
+.B \-\-idle
+were given.
 .PP
-An example is installed at
-.IR /usr/share/doc/expresso/expresso.conf.example .
-.SH EXAMPLES
+Example:
+.PP
+.RS
 .nf
-expresso start 30
-expresso start 2h
-expresso start inf
-expresso status
-expresso stop
+state=on
+duration=1800
+started=1759158600
+until=1759160400
+remaining=1740
+lid=false
+idle=true
 .fi
+.RE
+.SH TIMING AND SUSPEND
+The deadline is wall-clock time:
+.B on 1800
+means until 30 minutes from now, and time spent suspended counts.
+If the system resumes after the deadline, the lock ends at once.
+.PP
+The lock always blocks suspend requests, such as
+.B systemctl suspend
+or an idle daemon's suspend.
+Closing the lid still suspends the system unless
+.B \-\-lid
+was given, because
+.BR logind.conf (5)
+ignores such locks for the lid by default
+.RB ( LidSwitchIgnoreInhibited=yes ).
+.SH NOTIFICATIONS
+The lock unit itself sends desktop notifications, whatever started or stopped
+it: when the lock is taken ("Expresso on"), when it ends ("Time's up" or
+"Turned off"), and when it fails ("Expresso failed", with where to look in the
+journal).
+The commands send no notifications themselves, and
+.B on
+and
+.B off
+print nothing on success.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+For
+.BR status :
+a lock is on.
+.TP
+.B 1
+No lock is on
+.RB ( status ", " off ).
+.TP
+.B 2
+Usage error: unknown command or option, invalid or missing
+.IR DURATION .
+.TP
+.B 3
+A lock is already on
+.RB ( on ).
+.TP
+.B 4
+System error: systemd could not be reached, the lock could not be taken or
+released, or
+.B app-expresso.service
+exists but was not started by this version of
+.BR expresso .
+.SH EXAMPLES
+Keep the system awake for 45 minutes:
+.PP
+.RS
+.nf
+expresso on 2700
+.fi
+.RE
+.PP
+Until turned off, with the screen kept on:
+.PP
+.RS
+.nf
+expresso on 0 \-\-idle
+.fi
+.RE
+.PP
+Toggle, for example from a keybinding:
+.PP
+.RS
+.nf
+expresso off 2>/dev/null || expresso on 3600 \-\-idle
+.fi
+.RE
+.PP
+Check for a lock, and read a value:
+.PP
+.RS
+.nf
+if expresso status >/dev/null; then
+    expresso status | sed \-n 's/^remaining=//p'
+fi
+.fi
+.RE
+.SH FILES
+None. There is no configuration file; put your preferred flags in a
+keybinding, alias or script.
 .SH SEE ALSO
 .BR systemd-inhibit (1),
 .BR systemd-run (1),
-.BR rofi (1)
+.BR logind.conf (5),
+.BR notify-send (1)
 .SH BUGS
 Report issues at https://github.com/Davi-S/expresso/issues

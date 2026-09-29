@@ -21,7 +21,6 @@ install:
 	install -Dm644 man/expresso.1            $(MANDIR)/expresso.1
 	install -Dm644 completions/expresso.bash $(BASHCOMPDIR)/expresso
 	install -Dm644 README.md                 $(DOCDIR)/README.md
-	install -Dm644 examples/expresso.conf    $(DOCDIR)/expresso.conf.example
 
 uninstall:
 	rm -f  $(BINDIR)/expresso

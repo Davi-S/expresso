@@ -6,13 +6,50 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+A ground-up rewrite. **Not compatible with 1.x**: commands, options and output
+all changed, and the configuration file is gone.
+
+### Changed
+
+- Commands are now `on DURATION [--lid] [--idle]`, `off` and `status`
+  (were `start`, `stop`, `status`).
+- `DURATION` is whole seconds, and required; `0` means until `off`
+  (was minutes by default, with units, and `inf`/`infinite`).
+- `status` prints `key=value` lines (`state`, `duration`, `started`, `until`,
+  `remaining`, `lid`, `idle`) and exits 0 when a lock is on, 1 when not.
+- Every outcome has its own exit status: 1 no lock, 2 usage error,
+  3 lock already on, 4 system error. Errors go to stderr.
+- `on` refuses to replace a running lock; `off` fails when there is none.
+- A lock is one transient user unit, `app-expresso.service`, holding a
+  `systemd-inhibit` lock; the timer unit is gone.
+- A lock's deadline is wall-clock time: time suspended counts, and a lock whose
+  deadline passed during suspend ends as soon as the system resumes.
+- Notifications come from the lock unit: when a lock starts, ends (time's up or
+  turned off) or fails. Commands send none themselves.
+- New dependency: `glib2` (for `gdbus`).
+
 ### Added
 
-- `expresso version` / `--version`.
+- `--version`.
 - Man page and bash completion.
 - `Makefile` with `install` / `uninstall` (honours `PREFIX` and `DESTDIR`).
 - `LICENSE` file (MIT), installed by the AUR package.
-- Example config at `examples/expresso.conf`.
+
+### Removed
+
+- The configuration file and its `BLOCK_LID` / `BLOCK_IDLE` settings:
+  use `--lid` / `--idle`.
+- The `wayland-idle-inhibitor` integration: `--idle` takes logind's idle lock,
+  which idle daemons such as hypridle respect.
+- The `menu` command (rofi), until it is redesigned.
+- `help` and `version` commands: use `--help` and `--version`.
+
+### Fixed
+
+- An invalid duration could leave the system awake indefinitely.
+- `status` misreported the time left, depending on locale and date format.
+- The configuration file was executed as shell code.
+- No notification when a timed lock ended.
 
 ## [1.0.2] - 2026-06-24
 
