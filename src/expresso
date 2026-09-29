@@ -25,6 +25,7 @@ WAYLAND_INHIBITOR_CMD="wayland-idle-inhibitor.py"
 load_config() {
     # If the config file exists, source it to override defaults
     if [[ -f "$CONFIG_FILE" ]]; then
+        # shellcheck source=/dev/null
         source "$CONFIG_FILE"
     fi
 }
