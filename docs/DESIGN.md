@@ -119,7 +119,7 @@ loop:
 ### Notifications
 
 Sent only by the unit (`_wait` and `_stopped`). Separate notifications with a
-short timeout (about 5 s), no replacing.
+2-second timeout, no replacing.
 
 | Event | Detected by | Title | Body |
 |---|---|---|---|

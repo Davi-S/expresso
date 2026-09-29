@@ -10,7 +10,7 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[src/expresso]
+[{src/expresso,tests/fakes/*}]
 indent_style = space
 indent_size = 4
 
@@ -20,3 +20,7 @@ indent_style = tab
 [*.{yml,yaml}]
 indent_style = space
 indent_size = 2
+
+[*.bats]
+indent_style = space
+indent_size = 4
