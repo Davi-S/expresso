@@ -31,6 +31,7 @@ and checksums are filled in at publish time, so never edit them by hand there.
 
 ```bash
 git switch main && git pull
+make integration SUSPEND=1          # real systemd checks, on your desktop (CI can't)
 # make sure CHANGELOG.md [Unreleased] describes the changes
 scripts/release.sh 1.1.0            # commit + tag, local only
 git show                            # review
@@ -148,6 +149,7 @@ git push origin HEAD:master         # the AUR only accepts the master branch
 ```bash
 make check                                                   # shellcheck + shfmt, same as CI
 make test                                                    # bats test suite, same as CI
+make integration                                             # real systemd checks (SUSPEND=1: suspend too)
 make DESTDIR="$PWD/stage" PREFIX=/usr install && find stage  # what gets installed
 AUR_DRY_RUN=1 scripts/publish-aur.sh X.Y.Z                   # full AUR build of a tag, no push (tags after 1.0.2 only:
                                                              # older ones have no Makefile)

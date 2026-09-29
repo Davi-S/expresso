@@ -123,9 +123,11 @@ stop the monitor
 - `read -t` on the monitor's output is both the timer and the resume listener,
   so no separate `sleep` process is needed while the monitor runs.
 - Indefinite (`duration=0`): `sleep infinity`, no monitor; it ends when stopped.
-- Timestamps are whole seconds, and STARTED is rounded down, so a lock can
-  end up to 1 second before exactly DURATION seconds after `on`.
-- Measured on real systemd: a lock ends within its deadline second.
+- Timestamps are whole seconds. STARTED and each clock check are rounded down,
+  and the roundings cancel: a lock ends about DURATION seconds after `on`, which
+  is 0 to 1 second after `until`, never before it.
+- Measured on real systemd (tests/integration.sh): a lock ends within its
+  deadline second.
 - Known limit: a large wall-clock change while awake (manual clock set) is only
   noticed at the next logind signal or at the current timeout.
 
@@ -178,6 +180,10 @@ tests/
   fakes/             systemd-run  systemctl  date  gdbus  notify-send
   integration.sh     real systemd, run locally before each release
 ```
+
+- `make integration`: automatic checks against the real systemd and logind
+  (timing, the inhibitor logind holds, exit codes, the unit's journal).
+  `make integration SUSPEND=1` adds a suspend/resume check the user performs.
 
 - Plain bats (no helper libraries). `make test`; CI runs it on every push.
 - **Recording fakes:** each fake appends its argv to a log and prints the output and

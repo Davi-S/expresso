@@ -7,11 +7,11 @@ DOCDIR    = $(DESTDIR)$(PREFIX)/share/doc/expresso
 BASHCOMPDIR = $(DESTDIR)$(PREFIX)/share/bash-completion/completions
 
 SHELL_SOURCES = src/expresso completions/expresso.bash scripts/*.sh \
-                tests/helpers.bash tests/fakes/fake tests/*.bats
+                tests/helpers.bash tests/fakes/fake tests/*.bats tests/integration.sh
 
 BATS ?= bats
 
-.PHONY: all install uninstall check test
+.PHONY: all install uninstall check test integration
 
 all:
 	@echo "Nothing to build. Run 'make install' (PREFIX=$(PREFIX))."
@@ -37,3 +37,8 @@ check:
 # Run the test suite (needs bats: pacman -S bash-bats).
 test:
 	$(BATS) tests
+
+# Test against the real systemd; run locally before each release.
+# SUSPEND=1 adds the suspend/resume check (interactive).
+integration:
+	tests/integration.sh $(if $(SUSPEND),--suspend)
