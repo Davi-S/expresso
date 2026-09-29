@@ -26,7 +26,7 @@ all changed, and the configuration file is gone.
   deadline passed during suspend ends as soon as the system resumes.
 - Notifications come from the lock unit: when a lock starts, ends (time's up or
   turned off) or fails. Commands send none themselves.
-- New dependency: `glib2` (for `gdbus`).
+- Dependencies: adds `glib2` (for `gdbus`); drops `rofi`.
 
 ### Added
 
@@ -41,7 +41,7 @@ all changed, and the configuration file is gone.
   use `--lid` / `--idle`.
 - The `wayland-idle-inhibitor` integration: `--idle` takes logind's idle lock,
   which idle daemons such as hypridle respect.
-- The `menu` command (rofi), until it is redesigned.
+- The `menu` command (rofi). A redesigned menu is planned for a later release.
 - `help` and `version` commands: use `--help` and `--version`.
 
 ### Fixed

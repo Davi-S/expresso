@@ -5,8 +5,8 @@ This file records decisions. Open items are listed at the end.
 
 ## Goals
 
-- Bash only, minimal runtime dependencies: `bash`, `systemd`, `glib2` (for `gdbus`),
-  `libnotify`, and `rofi` once the menu is designed.
+- Bash only, minimal runtime dependencies: `bash`, `systemd`, `glib2` (for `gdbus`)
+  and `libnotify`. 2.0 ships without the menu; `rofi` returns with it.
 - Every feature is always on or doesn't exist (no optional dependencies).
 - A strict, scriptable CLI. Users compose their own workflows with shell scripts.
 - Fully testable in CI.
@@ -193,4 +193,4 @@ tests/
 
 ## Open
 
-- The menu: entries, custom input, flags, errors. Designed later, after the CLI works.
+- The menu: entries, custom input, flags, errors. Planned after 2.0 (a minor release).
