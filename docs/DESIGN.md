@@ -33,7 +33,8 @@ expresso --version
 - **`off` is synchronous:** when it returns, the lock is gone and `status` says off.
 - **`--help`** prints short usage to stdout and exits 0. `--version` prints
   `expresso X.Y.Z`. The full reference is `man expresso`.
-  A usage error prints a one-line hint to stderr and exits 2.
+  A usage error prints `expresso: <problem>` and
+  `Try 'expresso --help' for more information.` to stderr, and exits 2.
 
 ### Exit codes
 
@@ -136,15 +137,18 @@ One file, `src/expresso`, in layers that only call downward:
 cli (argv → validated request)         [menu: to be designed]
                 \
      core: on <seconds> <lid> <idle> · off · status → record · _wait · _stopped
-                          |
-     system: the only code calling systemd-run, systemctl, date, gdbus, notify-send
+                /                     \
+     values: pure functions         system: the only code calling systemd-run,
+     (is_duration, format_status…)   systemctl, date, gdbus, notify-send
 ```
 
 Discipline in place of types:
 - Parse and validate only at the edges. The core receives validated values only.
 - Globals are `readonly` constants. Functions communicate through arguments,
   stdout and exit codes. Use `local -r` and `declare -i` where applicable.
-- The core never prints for humans or calls `exit`.
+- The core never prints for humans. No function calls `exit`; errors propagate
+  with `|| return`, since Bash disables `set -e` in many contexts.
+- Never do arithmetic on an unvalidated string (Bash evaluates it as code).
 - `main` runs only when the file is executed, so tests can source it.
 
 ## Testing

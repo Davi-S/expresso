@@ -31,7 +31,7 @@ uninstall:
 
 # Lint and formatting check (same as CI).
 check:
-	shellcheck $(SHELL_SOURCES)
+	shellcheck -x $(SHELL_SOURCES)
 	shfmt -d $(SHELL_SOURCES)
 
 # Run the test suite (needs bats: pacman -S bash-bats).

@@ -1,297 +1,223 @@
 #!/usr/bin/env bash
-
-# Enforce strict error handling
-set -euo pipefail
+#
+# expresso: keep the system awake for a while.
+#
+# The design, and the reasons behind it, are in docs/DESIGN.md.
+#
+# Layers, top to bottom. Each calls only the layers below it.
+#   cli     argv → validated values; prints for humans; maps results to exit codes
+#   core    lock operations on validated values: on, off, status
+#   values  pure functions on validated values; no I/O besides printing the result
+#   system  the only code that runs external commands (not written yet)
+#
+# Conventions:
+#   - Globals are readonly constants. Everything else is `local`.
+#   - Functions return data on stdout and a status as their exit code.
+#     Only `main`'s caller exits.
+#   - Errors propagate explicitly with `|| return`. `set -e` is not relied on
+#     inside functions, because Bash disables it in many contexts.
+#   - Booleans are the strings `true` and `false`.
+#   - Never do arithmetic on an unvalidated string: Bash evaluates it as an
+#     expression, which can run commands. Validate with a regex first.
 
 VERSION="1.0.2"
+readonly VERSION
 
-# --- Configuration ---
-UNIT_NAME="expresso"
-TIMER_UNIT="${UNIT_NAME}.timer"
-SERVICE_UNIT="${UNIT_NAME}.service"
-INHIBITOR_UNIT="${UNIT_NAME}-inhibitor.service"
-WAYLAND_INHIBITOR_UNIT="${UNIT_NAME}-wayland.service"
+# Exit codes. Each has one meaning across all commands.
+# TODO(rewrite step 3): drop this directive once the core uses every code.
+# shellcheck disable=SC2034
+readonly \
+    EXIT_OK=0 \
+    EXIT_NO_LOCK=1 \
+    EXIT_USAGE=2 \
+    EXIT_ALREADY_ON=3 \
+    EXIT_SYSTEM=4
 
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/expresso"
-CONFIG_FILE="$CONFIG_DIR/expresso.conf"
+readonly MAX_DURATION=2147483647
 
-# --- Default Settings ---
-BLOCK_LID="false"
-BLOCK_IDLE="false"
-WAYLAND_INHIBITOR_CMD="wayland-idle-inhibitor.py"
+# --- values ------------------------------------------------------------------
 
-# --- Functions ---
-
-load_config() {
-    # If the config file exists, source it to override defaults
-    if [[ -f "$CONFIG_FILE" ]]; then
-        # shellcheck source=/dev/null
-        source "$CONFIG_FILE"
-    fi
+# is_duration STRING
+# Succeeds if STRING is a DURATION: whole seconds with no sign or leading zeros,
+# from 0 to MAX_DURATION. 0 means indefinite.
+is_duration() {
+    local -r value="$1"
+    [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+    # Compare lengths before values, so a huge number can't overflow.
+    ((${#value} < ${#MAX_DURATION})) && return 0
+    ((${#value} == ${#MAX_DURATION} && value <= MAX_DURATION))
 }
 
-show_help() {
+# inhibit_what LID IDLE
+# Print the systemd-inhibit --what= list: always sleep, plus the requested extras.
+inhibit_what() {
+    local -r lid="$1" idle="$2"
+    local what="sleep"
+    if [[ "$lid" == true ]]; then
+        what+=":handle-lid-switch"
+    fi
+    if [[ "$idle" == true ]]; then
+        what+=":idle"
+    fi
+    printf '%s\n' "$what"
+}
+
+# format_status DURATION STARTED LID IDLE NOW
+# Print the `status` output for a running lock. All arguments must be validated.
+format_status() {
+    local -r duration="$1" started="$2" lid="$3" idle="$4" now="$5"
+    local until remaining
+    if ((duration == 0)); then
+        until=infinity
+        remaining=infinity
+    else
+        until=$((started + duration))
+        remaining=$((until > now ? until - now : 0))
+    fi
+    printf '%s\n' \
+        "state=on" \
+        "duration=$duration" \
+        "started=$started" \
+        "until=$until" \
+        "remaining=$remaining" \
+        "lid=$lid" \
+        "idle=$idle"
+}
+
+# --- core --------------------------------------------------------------------
+# Placeholders until the system layer exists (step 3 of the rewrite).
+
+core_on() {
+    err "'on' is not implemented yet"
+    return "$EXIT_SYSTEM"
+}
+
+core_off() {
+    err "'off' is not implemented yet"
+    return "$EXIT_SYSTEM"
+}
+
+core_status() {
+    err "'status' is not implemented yet"
+    return "$EXIT_SYSTEM"
+}
+
+# --- cli ---------------------------------------------------------------------
+
+# err MESSAGE: print an error message to stderr.
+err() {
+    printf 'expresso: %s\n' "$1" >&2
+}
+
+# usage_error MESSAGE: report a usage error. Returns EXIT_USAGE, so callers can
+# write `check || usage_error "..." || return`.
+usage_error() {
+    err "$1"
+    printf "Try 'expresso --help' for more information.\n" >&2
+    return "$EXIT_USAGE"
+}
+
+cli_help() {
     cat <<EOF
-Usage: expresso <command> [argument]
+Usage: expresso on DURATION [--lid] [--idle]
+       expresso off
+       expresso status
+       expresso --help | --version
+
+Keep the system awake: while a lock is on, the system does not suspend.
 
 Commands:
-  start <time>   Starts a caffeine lock. Defaults to minutes if no unit is given.
-                 Formats: '15', '15m', '15s', '1h', 'infinite', 'inf'.
-  stop           Cancels any active caffeine lock.
-  status         Returns the current timer status and time remaining.
-  menu           Opens the interactive Rofi GUI.
-  help           Shows this help message.
-  version        Shows the version.
+  on DURATION  Hold a lock for DURATION seconds, or until 'off' if DURATION is 0.
+      --lid    Also keep closing the laptop lid from suspending.
+      --idle   Also keep the screen from dimming, locking or turning off.
+  off          Release the lock.
+  status       Print the lock state as key=value lines.
 
-Examples:
-  expresso start 30
-  expresso start infinite
-  expresso status
-  expresso menu
+Exit codes: 0 success or lock on, 1 no lock, 2 usage error,
+            3 lock already on, 4 system error.
+
+See 'man expresso' for details.
 EOF
 }
 
-stop_timer() {
-    local quiet="${1:-false}"
-
-    # Stop the timer, the payload service, the logind inhibitor, and the Wayland inhibitor
-    systemctl --user stop "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" 2>/dev/null || true
-    systemctl --user reset-failed "$TIMER_UNIT" "$SERVICE_UNIT" "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" 2>/dev/null || true
-
-    if [[ "$quiet" != "true" ]]; then
-        notify-send -a "expresso" "Expresso Off" "Sleep inhibition disabled"
-    fi
+# cli_no_args COMMAND ARG...
+# Succeeds if COMMAND was given no arguments.
+cli_no_args() {
+    local -r command="$1"
+    shift
+    (($# == 0)) || usage_error "'$command' takes no arguments"
 }
 
-start_timer() {
-    local duration="$1"
-
-    if [[ -z "$duration" ]]; then
-        echo "Error: Duration not provided." >&2
-        show_help
-        exit 1
-    fi
-
-    # Load user preferences from the config file before starting
-    load_config
-
-    stop_timer "true"
-
-    # Determine what systemd-logind should inhibit based on config
-    # We ALWAYS block sleep, but the rest are optional
-    local inhibit_what="sleep"
-
-    if [[ "${BLOCK_LID,,}" == "true" ]]; then
-        inhibit_what="${inhibit_what}:handle-lid-switch"
-    fi
-
-    if [[ "${BLOCK_IDLE,,}" == "true" ]]; then
-        inhibit_what="${inhibit_what}:idle"
-    fi
-
-    # Start the background systemd-logind inhibitor process
-    systemd-run --user \
-        --unit="$INHIBITOR_UNIT" \
-        systemd-inhibit --what="$inhibit_what" --who="expresso" --why="User requested" sleep infinity >/dev/null 2>&1
-
-    # Start the Wayland protocol inhibitor (Blocks Dim, DPMS, and Lock screen)
-    if [[ "${BLOCK_IDLE,,}" == "true" ]]; then
-        # Extract just the command name in case arguments are added in the config
-        local cmd_name
-        cmd_name=$(echo "$WAYLAND_INHIBITOR_CMD" | awk '{print $1}')
-
-        if command -v "$cmd_name" &>/dev/null; then
-            systemd-run --user \
-                --unit="$WAYLAND_INHIBITOR_UNIT" \
-                --setenv=WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}" \
-                $WAYLAND_INHIBITOR_CMD >/dev/null 2>&1
-        else
-            echo "Warning: $cmd_name not installed or not in PATH." >&2
-            notify-send -u critical -a "expresso" "Dependency Missing" "Could not find '$cmd_name'. Check your config."
-        fi
-    fi
-
-    # Check for infinite mode
-    if [[ "${duration,,}" == "infinite" || "${duration,,}" == "inf" ]]; then
-        echo "Expresso started: System will stay awake indefinitely."
-        notify-send -a "expresso" "Expresso Active" "Sleep inhibition: Infinite"
-        return
-    fi
-
-    if [[ "$duration" =~ ^[0-9]+$ ]]; then
-        duration="${duration}m"
-    fi
-
-    # Start the transient timer to kill the inhibitors when time is up
-    systemd-run --user \
-        --unit="$UNIT_NAME" \
-        --on-active="$duration" \
-        --timer-property="AccuracySec=1s" \
-        systemctl --user stop "$INHIBITOR_UNIT" "$WAYLAND_INHIBITOR_UNIT" >/dev/null 2>&1
-
-    echo "Expresso started: System will stay awake for $duration."
-    notify-send -a "expresso" "Expresso Active" "Sleep inhibition: $duration"
+# cli_parse_on ARG...
+# Validate the arguments of `on`. Prints "DURATION LID IDLE".
+cli_parse_on() {
+    local duration="" lid=false idle=false arg
+    for arg in "$@"; do
+        case "$arg" in
+        --lid)
+            [[ "$lid" == false ]] || usage_error "option '--lid' given twice" || return
+            lid=true
+            ;;
+        --idle)
+            [[ "$idle" == false ]] || usage_error "option '--idle' given twice" || return
+            idle=true
+            ;;
+        -*[!0-9]* | -)
+            usage_error "unknown option '$arg'" || return
+            ;;
+        *)
+            # Also reached by negative numbers, which is_duration rejects.
+            [[ -z "$duration" ]] || usage_error "unexpected argument '$arg'" || return
+            is_duration "$arg" ||
+                usage_error "invalid DURATION '$arg': expected whole seconds from 0 to $MAX_DURATION" ||
+                return
+            duration="$arg"
+            ;;
+        esac
+    done
+    [[ -n "$duration" ]] || usage_error "missing DURATION" || return
+    printf '%s %s %s\n' "$duration" "$lid" "$idle"
 }
 
-get_status() {
-    # Verify the logind inhibitor is actually running
-    local inhibitor_state
-    inhibitor_state=$(systemctl --user is-active "$INHIBITOR_UNIT" 2>/dev/null || true)
-
-    if [[ "$inhibitor_state" != "active" ]]; then
-        echo "Inactive"
-        return
-    fi
-
-    # If the inhibitor is running but there is no timer, it is set to Infinite
-    local timer_state
-    timer_state=$(systemctl --user is-active "$TIMER_UNIT" 2>/dev/null || true)
-
-    if [[ "$timer_state" != "active" ]]; then
-        echo "Infinite"
-        return
-    fi
-
-    local timer_output
-    timer_output=$(systemctl --user list-timers "$TIMER_UNIT" --no-legend 2>/dev/null || true)
-
-    if [[ -z "$timer_output" ]]; then
-        echo "Active"
-        return
-    fi
-
-    local target_time
-    target_time=$(echo "$timer_output" | awk '{print $2, $3, $4}')
-
-    if [[ -z "$target_time" ]]; then
-        echo "Active"
-        return
-    fi
-
-    local next_sec
-    next_sec=$(date -d "$target_time" +%s 2>/dev/null || true)
-
-    if [[ -z "$next_sec" ]]; then
-        echo "Active"
-        return
-    fi
-
-    local now_sec
-    now_sec=$(date +%s)
-    local diff_sec=$((next_sec - now_sec))
-
-    if ((diff_sec <= 0)); then
-        echo "Stopping..."
-        return
-    fi
-
-    local hours=$((diff_sec / 3600))
-    local mins=$(((diff_sec % 3600) / 60))
-
-    if ((hours > 0)); then
-        echo "${hours}h ${mins}m"
-    elif ((mins > 0)); then
-        echo "${mins}m"
-    else
-        echo "<1m"
-    fi
+cli_on() {
+    local request duration lid idle
+    request="$(cli_parse_on "$@")" || return
+    read -r duration lid idle <<<"$request"
+    core_on "$duration" "$lid" "$idle"
 }
 
-show_menu() {
-    if ! command -v rofi &>/dev/null; then
-        echo "Error: rofi is not installed or not in PATH." >&2
-        exit 1
-    fi
-
-    local current_status
-    current_status=$(get_status)
-
-    local options="15 min\n30 min\n1 hour\n2 hours\nInfinite\nCustom..."
-
-    if [[ "$current_status" != "Inactive" ]]; then
-        options="$options\n────────────────────────\nTurn Off ($current_status)"
-    fi
-
-    local choice
-    choice=$(echo -e "$options" | rofi -dmenu -i -p "Expresso:" || true)
-
-    case "$choice" in
-    "15 min")
-        start_timer "15m"
+main() {
+    (($# > 0)) || usage_error "missing command" || return
+    local -r command="$1"
+    shift
+    case "$command" in
+    on)
+        cli_on "$@"
         ;;
-    "30 min")
-        start_timer "30m"
+    off)
+        cli_no_args "$command" "$@" || return
+        core_off
         ;;
-    "1 hour")
-        start_timer "1h"
+    status)
+        cli_no_args "$command" "$@" || return
+        core_status
         ;;
-    "2 hours")
-        start_timer "2h"
+    --help)
+        cli_no_args "$command" "$@" || return
+        cli_help
         ;;
-    "Infinite")
-        start_timer "infinite"
-        ;;
-    "Custom...")
-        local custom_time
-        custom_time=$(rofi -dmenu -p "Enter time (e.g., 45, 1h, inf):" || true)
-
-        if [[ "${custom_time,,}" == "infinite" || "${custom_time,,}" == "inf" ]]; then
-            start_timer "infinite"
-        elif [[ "$custom_time" =~ ^[0-9]+[a-zA-Z0-9\ ]*$ ]]; then
-            start_timer "$custom_time"
-        elif [[ -n "$custom_time" ]]; then
-            notify-send -u critical -a "expresso" "Error" "Invalid input. Please start with a number or type 'inf'."
-        fi
-        ;;
-    "Turn Off"*)
-        stop_timer
-        ;;
-    "──────────────")
-        exit 0
-        ;;
-    "")
-        exit 0
+    --version)
+        cli_no_args "$command" "$@" || return
+        printf 'expresso %s\n' "$VERSION"
         ;;
     *)
-        notify-send -u critical -a "expresso" "Error" "Unknown selection."
-        exit 1
+        usage_error "unknown command '$command'"
         ;;
     esac
 }
 
-# --- Main Logic Routing ---
-
-if [[ $# -eq 0 ]]; then
-    show_help
-    exit 1
+# Run only when executed, not when sourced (the tests source this file).
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    set -euo pipefail
+    main "$@"
 fi
-
-COMMAND="$1"
-shift
-
-case "$COMMAND" in
-start)
-    start_timer "${1:-}"
-    ;;
-stop)
-    stop_timer
-    echo "Timer stopped."
-    ;;
-status)
-    get_status
-    ;;
-menu)
-    show_menu
-    ;;
-help | --help | -h)
-    show_help
-    ;;
-version | --version | -V)
-    echo "expresso $VERSION"
-    ;;
-*)
-    echo "Error: Unknown command '$COMMAND'" >&2
-    show_help
-    exit 1
-    ;;
-esac
