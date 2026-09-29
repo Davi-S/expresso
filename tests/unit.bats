@@ -119,3 +119,83 @@ usage_hint="Try 'expresso --help' for more information."
     assert_status 2
     assert_stderr "expresso: unknown option '--forever'"$'\n'"$usage_hint"
 }
+
+# --- is_bool, is_timestamp, is_safe_path -------------------------------------
+
+@test "is_bool accepts only true and false" {
+    is_bool true
+    is_bool false
+    local value
+    for value in "" TRUE True 1 0 yes no " true"; do
+        if is_bool "$value"; then
+            fail "accepted '$value'"
+        fi
+    done
+}
+
+@test "is_timestamp accepts up to 12 digits without leading zeros" {
+    local value
+    for value in 0 1 1759158600 999999999999; do
+        is_timestamp "$value" || fail "rejected '$value'"
+    done
+    for value in "" -1 01 1.5 1759158600x 1000000000000; do
+        if is_timestamp "$value"; then
+            fail "accepted '$value'"
+        fi
+    done
+}
+
+@test "is_safe_path accepts absolute paths of plain characters only" {
+    local value
+    for value in /usr/bin/expresso /home/me/src/expresso-2.0/src/expresso /opt/a_b+c/expresso; do
+        is_safe_path "$value" || fail "rejected '$value'"
+    done
+    # shellcheck disable=SC2016 # a literal $ is the point
+    for value in "" expresso ./expresso "/my tools/expresso" '/a$b/expresso' /a%b/expresso '/a"b' "/a;b"; do
+        if is_safe_path "$value"; then
+            fail "accepted '$value'"
+        fi
+    done
+}
+
+# --- parse_unit_properties ---------------------------------------------------
+
+@test "parse_unit_properties: an inactive or unknown unit" {
+    run parse_unit_properties $'ActiveState=inactive\nEnvironment='
+    assert_status 0
+    assert_output "inactive"
+}
+
+@test "parse_unit_properties: every state other than active is inactive" {
+    local state
+    for state in failed activating deactivating reloading; do
+        run parse_unit_properties "ActiveState=$state"$'\nEnvironment='
+        assert_output "inactive"
+    done
+}
+
+@test "parse_unit_properties: an active unit" {
+    run parse_unit_properties $'ActiveState=active\nEnvironment=EXPRESSO_STARTED=1759158600 EXPRESSO_DURATION=1800 EXPRESSO_LID=false EXPRESSO_IDLE=true'
+    assert_status 0
+    assert_output "active 1800 1759158600 false true"
+}
+
+@test "parse_unit_properties: property and variable order do not matter" {
+    run parse_unit_properties $'Environment=EXPRESSO_IDLE=false EXPRESSO_LID=true EXPRESSO_DURATION=0 EXPRESSO_STARTED=5\nActiveState=active'
+    assert_output "active 0 5 true false"
+}
+
+@test "parse_unit_properties: an active unit with missing or invalid values fails" {
+    local environment
+    for environment in \
+        "" \
+        "EXPRESSO_STARTED=1 EXPRESSO_DURATION=60 EXPRESSO_LID=false" \
+        "EXPRESSO_STARTED=1 EXPRESSO_DURATION=60m EXPRESSO_LID=false EXPRESSO_IDLE=true" \
+        "EXPRESSO_STARTED=x EXPRESSO_DURATION=60 EXPRESSO_LID=false EXPRESSO_IDLE=true" \
+        "EXPRESSO_STARTED=1 EXPRESSO_DURATION=60 EXPRESSO_LID=yes EXPRESSO_IDLE=true" \
+        "OTHER=* EXPRESSO_DURATION=60 EXPRESSO_LID=false EXPRESSO_IDLE=true"; do
+        run parse_unit_properties "ActiveState=active"$'\n'"Environment=$environment"
+        assert_status 1
+        assert_output ""
+    done
+}

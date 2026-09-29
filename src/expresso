@@ -5,10 +5,11 @@
 # The design, and the reasons behind it, are in docs/DESIGN.md.
 #
 # Layers, top to bottom. Each calls only the layers below it.
-#   cli     argv → validated values; prints for humans; maps results to exit codes
+#   cli     argv → validated values; prints messages; maps results to exit codes
 #   core    lock operations on validated values: on, off, status
-#   values  pure functions on validated values; no I/O besides printing the result
-#   system  the only code that runs external commands (not written yet)
+#   system  the only code that runs external commands; validates what they
+#           return and reports its own failures
+#   values  pure functions: no I/O besides printing the result
 #
 # Conventions:
 #   - Globals are readonly constants. Everything else is `local`.
@@ -16,6 +17,8 @@
 #     Only `main`'s caller exits.
 #   - Errors propagate explicitly with `|| return`. `set -e` is not relied on
 #     inside functions, because Bash disables it in many contexts.
+#   - The layer that detects a problem reports it, except the core: it returns
+#     a code, and the cli turns it into a message.
 #   - Booleans are the strings `true` and `false`.
 #   - Never do arithmetic on an unvalidated string: Bash evaluates it as an
 #     expression, which can run commands. Validate with a regex first.
@@ -24,16 +27,20 @@ VERSION="1.0.2"
 readonly VERSION
 
 # Exit codes. Each has one meaning across all commands.
-# TODO(rewrite step 3): drop this directive once the core uses every code.
-# shellcheck disable=SC2034
-readonly \
-    EXIT_OK=0 \
-    EXIT_NO_LOCK=1 \
-    EXIT_USAGE=2 \
-    EXIT_ALREADY_ON=3 \
-    EXIT_SYSTEM=4
+readonly EXIT_NO_LOCK=1
+readonly EXIT_USAGE=2
+readonly EXIT_ALREADY_ON=3
+readonly EXIT_SYSTEM=4
 
 readonly MAX_DURATION=2147483647
+
+# The systemd user unit that holds the lock. It exists only while a lock is on.
+readonly UNIT="app-expresso.service"
+
+# This script's absolute path, for the unit to run `_wait` and `_stopped`.
+SELF="${BASH_SOURCE[0]}"
+[[ "$SELF" == /* ]] || SELF="$PWD/$SELF"
+readonly SELF
 
 # --- values ------------------------------------------------------------------
 
@@ -48,6 +55,25 @@ is_duration() {
     ((${#value} == ${#MAX_DURATION} && value <= MAX_DURATION))
 }
 
+# is_timestamp STRING
+# Succeeds if STRING is a Unix timestamp: at most 12 digits (year 33658), which
+# leaves room to add any DURATION without overflow.
+is_timestamp() {
+    [[ "$1" =~ ^(0|[1-9][0-9]{0,11})$ ]]
+}
+
+# is_bool STRING
+is_bool() {
+    [[ "$1" == true || "$1" == false ]]
+}
+
+# is_safe_path STRING
+# Succeeds if STRING is an absolute path systemd reads literally: no spaces,
+# quotes, `$` or `%`, which systemd would split, unquote or expand.
+is_safe_path() {
+    [[ "$1" =~ ^/[A-Za-z0-9/._+-]+$ ]]
+}
+
 # inhibit_what LID IDLE
 # Print the systemd-inhibit --what= list: always sleep, plus the requested extras.
 inhibit_what() {
@@ -60,6 +86,41 @@ inhibit_what() {
         what+=":idle"
     fi
     printf '%s\n' "$what"
+}
+
+# parse_unit_properties TEXT
+# Parse the output of `systemctl show --property=ActiveState --property=Environment`.
+# Prints "inactive", or "active DURATION STARTED LID IDLE" for a running lock.
+# Fails if the unit is active but lacks valid expresso values.
+parse_unit_properties() {
+    local line active_state="" environment=""
+    while IFS= read -r line; do
+        case "$line" in
+        ActiveState=*) active_state="${line#*=}" ;;
+        Environment=*) environment="${line#*=}" ;;
+        esac
+    done <<<"$1"
+
+    if [[ "$active_state" != active ]]; then
+        printf 'inactive\n'
+        return 0
+    fi
+
+    local variables variable duration="" started="" lid="" idle=""
+    read -ra variables <<<"$environment"
+    for variable in "${variables[@]}"; do
+        case "$variable" in
+        EXPRESSO_DURATION=*) duration="${variable#*=}" ;;
+        EXPRESSO_STARTED=*) started="${variable#*=}" ;;
+        EXPRESSO_LID=*) lid="${variable#*=}" ;;
+        EXPRESSO_IDLE=*) idle="${variable#*=}" ;;
+        esac
+    done
+    is_duration "$duration" || return 1
+    is_timestamp "$started" || return 1
+    is_bool "$lid" || return 1
+    is_bool "$idle" || return 1
+    printf 'active %s %s %s %s\n' "$duration" "$started" "$lid" "$idle"
 }
 
 # format_status DURATION STARTED LID IDLE NOW
@@ -84,30 +145,106 @@ format_status() {
         "idle=$idle"
 }
 
-# --- core --------------------------------------------------------------------
-# Placeholders until the system layer exists (step 3 of the rewrite).
-
-core_on() {
-    err "'on' is not implemented yet"
-    return "$EXIT_SYSTEM"
-}
-
-core_off() {
-    err "'off' is not implemented yet"
-    return "$EXIT_SYSTEM"
-}
-
-core_status() {
-    err "'status' is not implemented yet"
-    return "$EXIT_SYSTEM"
-}
-
-# --- cli ---------------------------------------------------------------------
+# --- system ------------------------------------------------------------------
 
 # err MESSAGE: print an error message to stderr.
 err() {
     printf 'expresso: %s\n' "$1" >&2
 }
+
+# sys_now: print the current Unix time.
+sys_now() {
+    local now
+    if ! now="$(date +%s)" || ! is_timestamp "$now"; then
+        err "could not read the current time"
+        return "$EXIT_SYSTEM"
+    fi
+    printf '%s\n' "$now"
+}
+
+# sys_unit_state
+# Print the lock's state as parse_unit_properties does: "inactive", or
+# "active DURATION STARTED LID IDLE".
+sys_unit_state() {
+    local properties
+    properties="$(systemctl --user show --property=ActiveState --property=Environment "$UNIT")" || {
+        err "could not read the lock state from systemd"
+        return "$EXIT_SYSTEM"
+    }
+    parse_unit_properties "$properties" || {
+        err "$UNIT is running but was not started by this version of expresso"
+        return "$EXIT_SYSTEM"
+    }
+}
+
+# sys_unit_start DURATION STARTED LID IDLE
+# Start the lock unit. The unit runs `_wait` inside systemd-inhibit, so the lock
+# is held exactly as long as `_wait` runs, and `_stopped` when it stops.
+sys_unit_start() {
+    local -r duration="$1" started="$2" lid="$3" idle="$4"
+    is_safe_path "$SELF" || {
+        err "cannot run from '$SELF': the path may only contain letters, digits and / . _ + -"
+        return "$EXIT_SYSTEM"
+    }
+    local what
+    what="$(inhibit_what "$lid" "$idle")"
+    systemd-run --user --quiet --collect \
+        --unit="$UNIT" --slice=app.slice \
+        --description="expresso: keep the system awake" \
+        --setenv=EXPRESSO_STARTED="$started" \
+        --setenv=EXPRESSO_DURATION="$duration" \
+        --setenv=EXPRESSO_LID="$lid" \
+        --setenv=EXPRESSO_IDLE="$idle" \
+        --property=ExecStopPost="$SELF _stopped" \
+        -- systemd-inhibit --what="$what" --who=expresso --why="expresso on" --mode=block \
+        "$SELF" _wait || {
+        err "could not start the lock"
+        return "$EXIT_SYSTEM"
+    }
+}
+
+# sys_unit_stop: stop the lock unit. Returns once it is fully stopped.
+sys_unit_stop() {
+    systemctl --user stop "$UNIT" || {
+        err "could not stop the lock"
+        return "$EXIT_SYSTEM"
+    }
+}
+
+# --- core --------------------------------------------------------------------
+
+# core_on DURATION LID IDLE
+core_on() {
+    local -r duration="$1" lid="$2" idle="$3"
+    local state now
+    state="$(sys_unit_state)" || return
+    [[ "$state" == inactive ]] || return "$EXIT_ALREADY_ON"
+    now="$(sys_now)" || return
+    sys_unit_start "$duration" "$now" "$lid" "$idle"
+}
+
+core_off() {
+    local state
+    state="$(sys_unit_state)" || return
+    [[ "$state" != inactive ]] || return "$EXIT_NO_LOCK"
+    sys_unit_stop
+}
+
+# core_status: print the status record. Returns EXIT_NO_LOCK when off.
+core_status() {
+    local state now
+    state="$(sys_unit_state)" || return
+    if [[ "$state" == inactive ]]; then
+        printf 'state=off\n'
+        return "$EXIT_NO_LOCK"
+    fi
+    local duration started lid idle
+    read -r _ duration started lid idle <<<"$state"
+    now="$(sys_now)" || return
+    format_status "$duration" "$started" "$lid" "$idle" "$now"
+}
+
+# --- cli ---------------------------------------------------------------------
 
 # usage_error MESSAGE: report a usage error. Returns EXIT_USAGE, so callers can
 # write `check || usage_error "..." || return`.
@@ -183,7 +320,27 @@ cli_on() {
     local request duration lid idle
     request="$(cli_parse_on "$@")" || return
     read -r duration lid idle <<<"$request"
-    core_on "$duration" "$lid" "$idle"
+    core_on "$duration" "$lid" "$idle" && return
+    local -r code=$?
+    if ((code == EXIT_ALREADY_ON)); then
+        err "a lock is already on; run 'expresso off' first"
+    fi
+    return "$code"
+}
+
+cli_off() {
+    cli_no_args off "$@" || return
+    core_off && return
+    local -r code=$?
+    if ((code == EXIT_NO_LOCK)); then
+        err "no lock is on"
+    fi
+    return "$code"
+}
+
+cli_status() {
+    cli_no_args status "$@" || return
+    core_status
 }
 
 main() {
@@ -191,17 +348,9 @@ main() {
     local -r command="$1"
     shift
     case "$command" in
-    on)
-        cli_on "$@"
-        ;;
-    off)
-        cli_no_args "$command" "$@" || return
-        core_off
-        ;;
-    status)
-        cli_no_args "$command" "$@" || return
-        core_status
-        ;;
+    on) cli_on "$@" ;;
+    off) cli_off "$@" ;;
+    status) cli_status "$@" ;;
     --help)
         cli_no_args "$command" "$@" || return
         cli_help
@@ -210,9 +359,7 @@ main() {
         cli_no_args "$command" "$@" || return
         printf 'expresso %s\n' "$VERSION"
         ;;
-    *)
-        usage_error "unknown command '$command'"
-        ;;
+    *) usage_error "unknown command '$command'" ;;
     esac
 }
 

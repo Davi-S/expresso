@@ -93,6 +93,11 @@ expresso on 1800 --idle
   values as its own environment.
 - **The lock cannot leak.** logind ties an inhibitor to the holding process's file
   descriptor; if the process dies for any reason, the lock is released.
+- **Install path.** The unit runs this script by absolute path. `on` refuses to
+  start (exit 4) if the path contains anything besides letters, digits and
+  `/ . _ + -`, because systemd would split, unquote or expand it.
+- **Concurrent `on`.** systemd refuses a second unit with the same name, so two
+  locks can never exist; the loser of a race gets exit 4 with systemd's message.
 - **Internal subcommands** `_wait` and `_stopped` are run by the unit, not by users.
   They are documented as internal and are not part of the public CLI.
 - **Users and sessions.** Each user has their own user manager, so their own unit.
@@ -137,15 +142,19 @@ One file, `src/expresso`, in layers that only call downward:
 cli (argv → validated request)         [menu: to be designed]
                 \
      core: on <seconds> <lid> <idle> · off · status → record · _wait · _stopped
-                /                     \
-     values: pure functions         system: the only code calling systemd-run,
-     (is_duration, format_status…)   systemctl, date, gdbus, notify-send
+                          |
+     system: the only code calling systemd-run, systemctl, date, gdbus,
+             notify-send; validates their output and reports its own failures
+                          |
+     values: pure functions (is_duration, parse_unit_properties, format_status…)
 ```
 
 Discipline in place of types:
 - Parse and validate only at the edges. The core receives validated values only.
 - Globals are `readonly` constants. Functions communicate through arguments,
   stdout and exit codes. Use `local -r` and `declare -i` where applicable.
+- The layer that detects a problem reports it, except the core: it returns a
+  code (1 no lock, 3 already on) and the cli prints the message.
 - The core never prints for humans. No function calls `exit`; errors propagate
   with `|| return`, since Bash disables `set -e` in many contexts.
 - Never do arithmetic on an unvalidated string (Bash evaluates it as code).
