@@ -127,7 +127,8 @@ stop the monitor
   and the roundings cancel: a lock ends about DURATION seconds after `on`, which
   is 0 to 1 second after `until`, never before it.
 - Measured on real systemd (tests/integration.sh): a lock ends within its
-  deadline second.
+  deadline second; after resuming past the deadline (lid closed), it ended
+  26 ms after resume.
 - Known limit: a large wall-clock change while awake (manual clock set) is only
   noticed at the next logind signal or at the current timeout.
 
