@@ -144,8 +144,10 @@ check "until" infinity "$(field until)"
 check "remaining" infinity "$(field remaining)"
 check "lid" true "$(field lid)"
 check "logind holds sleep and the lid switch" "sleep:handle-lid-switch block" "$(inhibitor)"
+check "status --notify: on (exit 0)" 0 "$(code status --notify)"
 check "off succeeds" 0 "$(code off)"
 check "off is synchronous: status is off right after" 1 "$(code status)"
+check "status --notify: off (exit 1)" 1 "$(code status --notify)"
 check "logind no longer holds the lock" "" "$(inhibitor)"
 check "off again: no lock (exit 1)" 1 "$(code off)"
 
@@ -167,11 +169,13 @@ fi
 
 cat <<'EOF'
 
-  You should have seen four notifications, each for about 2 seconds:
-    Expresso on   Until HH:MM · idle
+  You should have seen six notifications, each for about 2 seconds:
+    Expresso on   Until HH:MM - idle
     Expresso off  Time's up
-    Expresso on   Indefinitely · lid
+    Expresso on   Indefinitely - lid
+    Expresso on   Indefinitely - lid     (status --notify)
     Expresso off  Turned off
+    Expresso off  No lock is on          (status --notify)
 EOF
 
 # -----------------------------------------------------------------------------

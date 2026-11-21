@@ -16,7 +16,7 @@ This file records decisions. Open items are listed at the end.
 ```
 expresso on DURATION [--lid] [--idle]
 expresso off
-expresso status
+expresso status [--notify]
 expresso --help
 expresso --version
 ```
@@ -29,7 +29,8 @@ expresso --version
   dim, lock or turn off the screen).
 - **No config file.** Preferred flags live in the user's keybind or alias.
 - **stdout is data only; messages and errors go to stderr.**
-- **The CLI never sends notifications.** The unit sends all of them.
+- **The CLI sends no notifications of its own.** The unit sends all of them,
+  except the one `status --notify` asks for.
 - **`off` is synchronous:** when it returns, the lock is gone and `status` says off.
 - **`--help`** prints short usage to stdout and exits 0. `--version` prints
   `expresso X.Y.Z`. The full reference is `man expresso`.
@@ -66,6 +67,9 @@ idle=true             idle=false
   `started` and `until` are Unix timestamps, and `remaining` is in seconds.
 - An indefinite lock has `duration=0` and `until`/`remaining` = `infinity`.
 - When off, the only line is `state=off`.
+- `--notify` also shows the state as a notification (see Notifications), for
+  keybindings. The output and exit code are the same; a notification that
+  fails is exit 4, after the output.
 
 ## Runtime model
 
@@ -134,16 +138,19 @@ stop the monitor
 
 ### Notifications
 
-Sent only by the unit (`_wait` and `_stopped`), with `notify-send
---app-name=expresso --expire-time=2000`. Separate notifications, no replacing.
+Sent by the unit (`_wait` and `_stopped`), and by `status --notify` on request,
+with `notify-send --app-name=expresso --expire-time=2000`. Separate
+notifications, no replacing.
 If the "started" notification fails, the lock is kept (holding it matters more).
 
 | Event | Detected by | Title | Body |
 |---|---|---|---|
-| Started | `_wait` starts (lock is held) | Expresso on | `Until 15:30` (today) / `Until Tue 09:00` (within 6 days) / `Until 2025-10-29 15:10` / `Indefinitely`, plus ` · lid, idle` when set. Always English. |
+| Started | `_wait` starts (lock is held) | Expresso on | `Until 15:30` (today) / `Until Tue 09:00` (within 6 days) / `Until 2025-10-29 15:10` / `Indefinitely`, plus ` - lid, idle` when set. Always English. |
 | Time's up | `EXIT_CODE=exited`, `EXIT_STATUS=0` | Expresso off | `Time's up` |
 | Turned off | `EXIT_CODE=killed` (any signal) | Expresso off | `Turned off` |
 | Failed | anything else: non-zero exit, core dump, no information | Expresso failed | `Could not take the lock. See: journalctl --user -u app-expresso` (critical) |
+| Status, on | `status --notify` while a lock is on | Expresso on | As "Started", with the time left after a deadline: `Until 15:40 (29m left) - idle`. The time left is in its two largest units, rounded down (`2d 3h`, `1h 5m`, `29m`, `45s`). |
+| Status, off | `status --notify` while no lock is on | Expresso off | `No lock is on` |
 
 ## Code structure
 
@@ -152,7 +159,7 @@ One file, `src/expresso`, in layers that only call downward:
 ```
 cli (argv → validated request)         [menu: to be designed]
                 \
-     core: on <seconds> <lid> <idle> · off · status → record · _wait · _stopped
+     core: on <seconds> <lid> <idle>, off, status -> record, _wait, _stopped
                           |
      system: the only code calling systemd-run, systemctl, date, gdbus,
              notify-send; validates their output and reports its own failures

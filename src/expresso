@@ -5,7 +5,7 @@
 # The design, and the reasons behind it, are in docs/DESIGN.md.
 #
 # Layers, top to bottom. Each calls only the layers below it.
-#   cli     argv → validated values; prints messages; maps results to exit codes
+#   cli     argv -> validated values; prints messages; maps results to exit codes
 #   core    lock operations on validated values: on, off, status
 #   system  the only code that runs external commands; validates what they
 #           return and reports its own failures
@@ -176,15 +176,37 @@ format_until() {
     fi
 }
 
-# describe_lock DURATION STARTED LID IDLE NOW
-# Print the body of the "Expresso on" notification, e.g. "Until 15:40 · lid, idle".
+# format_left SECONDS
+# Print the time left, for a notification, in its two largest units: "2d 3h
+# left", "1h 5m left", "29m left" or "45s left". Rounded down, so it never
+# shows more time than there is.
+format_left() {
+    local -r seconds="$1"
+    if ((seconds >= 86400)); then
+        printf '%dd %dh left\n' $((seconds / 86400)) $((seconds % 86400 / 3600))
+    elif ((seconds >= 3600)); then
+        printf '%dh %dm left\n' $((seconds / 3600)) $((seconds % 3600 / 60))
+    elif ((seconds >= 60)); then
+        printf '%dm left\n' $((seconds / 60))
+    else
+        printf '%ds left\n' "$seconds"
+    fi
+}
+
+# describe_lock DURATION STARTED LID IDLE NOW LEFT
+# Print the body of an "Expresso on" notification, e.g. "Until 15:40 - lid, idle".
+# With LEFT true, a timed lock also shows the time left: "Until 15:40 (29m left)".
 describe_lock() {
-    local -r duration="$1" started="$2" lid="$3" idle="$4" now="$5"
+    local -r duration="$1" started="$2" lid="$3" idle="$4" now="$5" left="$6"
     local text flags=""
     if ((duration == 0)); then
         text="Indefinitely"
     else
-        text="$(format_until $((started + duration)) "$now")"
+        local -r until=$((started + duration))
+        text="$(format_until "$until" "$now")"
+        if [[ "$left" == true ]]; then
+            text+=" ($(format_left $((until > now ? until - now : 0))))"
+        fi
     fi
     if [[ "$lid" == true ]]; then
         flags="lid"
@@ -192,7 +214,7 @@ describe_lock() {
     if [[ "$idle" == true ]]; then
         flags="${flags:+$flags, }idle"
     fi
-    printf '%s%s\n' "$text" "${flags:+ · $flags}"
+    printf '%s%s\n' "$text" "${flags:+ - $flags}"
 }
 
 # stop_reason EXIT_CODE EXIT_STATUS
@@ -360,18 +382,28 @@ core_off() {
     sys_unit_stop
 }
 
-# core_status: print the status record. Returns EXIT_NO_LOCK when off.
+# core_status NOTIFY
+# Print the status record and, with NOTIFY true, also show the state as a
+# notification. Returns EXIT_NO_LOCK when off.
 core_status() {
+    local -r notify="$1"
     local state now
     state="$(sys_unit_state)" || return
     if [[ "$state" == inactive ]]; then
         printf 'state=off\n'
+        if [[ "$notify" == true ]]; then
+            sys_notify normal "Expresso off" "No lock is on" || return
+        fi
         return "$EXIT_NO_LOCK"
     fi
     local duration started lid idle
     read -r _ duration started lid idle <<<"$state"
     now="$(sys_now)" || return
     format_status "$duration" "$started" "$lid" "$idle" "$now"
+    if [[ "$notify" == true ]]; then
+        sys_notify normal "Expresso on" \
+            "$(describe_lock "$duration" "$started" "$lid" "$idle" "$now" true)" || return
+    fi
 }
 
 # core_wait
@@ -382,7 +414,7 @@ core_wait() {
     values="$(sys_lock_env)" || return
     read -r duration started lid idle <<<"$values"
     now="$(sys_now)" || return
-    body="$(describe_lock "$duration" "$started" "$lid" "$idle" "$now")"
+    body="$(describe_lock "$duration" "$started" "$lid" "$idle" "$now" false)"
     # Holding the lock matters more than announcing it.
     sys_notify normal "Expresso on" "$body" || true
     if ((duration == 0)); then
@@ -416,7 +448,7 @@ cli_help() {
     cat <<EOF
 Usage: expresso on DURATION [--lid] [--idle]
        expresso off
-       expresso status
+       expresso status [--notify]
        expresso --help | --version
 
 Keep the system awake: while a lock is on, the system does not suspend.
@@ -427,6 +459,7 @@ Commands:
       --idle   Also keep the screen from dimming, locking or turning off.
   off          Release the lock.
   status       Print the lock state as key=value lines.
+      --notify Also show the state as a desktop notification.
 
 Exit codes: 0 success or lock on, 1 no lock, 2 usage error,
             3 lock already on, 4 system error.
@@ -496,9 +529,27 @@ cli_off() {
     return "$code"
 }
 
+# cli_parse_status ARG...
+# Validate the arguments of `status`. Prints NOTIFY.
+cli_parse_status() {
+    local notify=false arg
+    for arg in "$@"; do
+        case "$arg" in
+        --notify)
+            [[ "$notify" == false ]] || usage_error "option '--notify' given twice" || return
+            notify=true
+            ;;
+        -*) usage_error "unknown option '$arg'" || return ;;
+        *) usage_error "unexpected argument '$arg'" || return ;;
+        esac
+    done
+    printf '%s\n' "$notify"
+}
+
 cli_status() {
-    cli_no_args status "$@" || return
-    core_status
+    local notify
+    notify="$(cli_parse_status "$@")" || return
+    core_status "$notify"
 }
 
 main() {

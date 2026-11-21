@@ -46,9 +46,15 @@ complete_words() {
     assert_equal "$(complete_words on "18")" ""
 }
 
+@test "after status: --notify, once" {
+    assert_equal "$(complete_words status "")" "--notify"
+    assert_equal "$(complete_words status "--n")" "--notify"
+    assert_equal "$(complete_words status --notify "")" ""
+}
+
 @test "the other commands take no arguments" {
     local cmd
-    for cmd in off status --help --version; do
+    for cmd in off --help --version; do
         assert_equal "$(complete_words "$cmd" "")" ""
     done
 }

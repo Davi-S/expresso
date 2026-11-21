@@ -6,6 +6,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `status --notify` also shows the lock's state as a desktop notification, for
+  keybindings: "Expresso on" with `Until 15:40 (29m left) - idle`, or
+  "Expresso off" with `No lock is on`. The output and exit code are those of
+  `status`.
+
+### Changed
+
+- The "Expresso on" notification separates the extras with a plain hyphen
+  (` - `) instead of a middle dot: `Until 15:40 - lid, idle`.
+
 ## [2.0.0] - 2026-09-29
 
 A ground-up rewrite. **Not compatible with 1.x**: commands, options and output

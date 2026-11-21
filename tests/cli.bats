@@ -39,7 +39,7 @@ usage_hint="Try 'expresso --help' for more information."
 
 @test "commands without arguments reject arguments" {
     local cmd
-    for cmd in off status --help --version _wait _stopped; do
+    for cmd in off --help --version _wait _stopped; do
         run --separate-stderr "$EXPRESSO" "$cmd" extra
         assert_status 2
         assert_stderr "expresso: '$cmd' takes no arguments"$'\n'"$usage_hint"
@@ -48,6 +48,8 @@ usage_hint="Try 'expresso --help' for more information."
 
 @test "usage errors never touch the system" {
     run "$EXPRESSO" on 10m --lid
+    assert_status 2
+    run "$EXPRESSO" status --notify extra
     assert_status 2
     assert_equal "$(calls)" ""
 }
@@ -113,6 +115,73 @@ assert_lock_started() {
     assert_status 0
     assert_output "$(printf '%s\n' state=on duration=0 started=1759158600 \
         until=infinity remaining=infinity lid=true idle=true)"
+}
+
+@test "status: sends no notification" {
+    fake_lock_on 1800 1759158600 false true
+    fake_now 1759158660
+    run "$EXPRESSO" status
+    refute_called notify-send
+}
+
+@test "status --notify: no lock" {
+    fake_lock_off
+    run --separate-stderr "$EXPRESSO" status --notify
+    assert_status 1
+    assert_output "state=off"
+    assert_stderr ""
+    assert_notified normal "Expresso off" "No lock is on"
+}
+
+@test "status --notify: timed lock" {
+    fake_lock_on 1800 1759158600 false true
+    fake_now 1759158660
+    run --separate-stderr "$EXPRESSO" status --notify
+    assert_status 0
+    assert_output "$(printf '%s\n' state=on duration=1800 started=1759158600 \
+        until=1759160400 remaining=1740 lid=false idle=true)"
+    assert_stderr ""
+    assert_notified normal "Expresso on" "Until 15:40 (29m left) - idle"
+}
+
+@test "status --notify: indefinite lock" {
+    fake_lock_on 0 1759158600 true false
+    fake_now 1759158660
+    run "$EXPRESSO" status --notify
+    assert_status 0
+    assert_notified normal "Expresso on" "Indefinitely - lid"
+}
+
+@test "status --notify: a failed notification is a system error, after the output" {
+    fake_lock_on 1800 1759158600 false false
+    fake_now 1759158660
+    fake notify-send --exit 1
+    run --separate-stderr "$EXPRESSO" status --notify
+    assert_status 4
+    assert_output "$(printf '%s\n' state=on duration=1800 started=1759158600 \
+        until=1759160400 remaining=1740 lid=false idle=false)"
+    assert_stderr "expresso: could not send a notification"
+
+    fake_lock_off
+    run --separate-stderr "$EXPRESSO" status --notify
+    assert_status 4
+    assert_output "state=off"
+}
+
+@test "status --notify: a system error sends no notification" {
+    fake systemctl --args "$SHOW_ARGS" --exit 1
+    run "$EXPRESSO" status --notify
+    assert_status 4
+    refute_called notify-send
+}
+
+@test "status: arguments other than --notify are usage errors" {
+    run --separate-stderr "$EXPRESSO" status extra
+    assert_status 2
+    assert_stderr "expresso: unexpected argument 'extra'"$'\n'"$usage_hint"
+    run --separate-stderr "$EXPRESSO" status --idle
+    assert_status 2
+    assert_stderr "expresso: unknown option '--idle'"$'\n'"$usage_hint"
 }
 
 @test "status: systemd unreachable is a system error" {
@@ -245,7 +314,7 @@ assert_notified() { # URGENCY TITLE BODY
     clock 1759158600 1759160400
     run "$EXPRESSO" _wait
     assert_status 0
-    assert_notified normal "Expresso on" "Until 15:40 · idle"
+    assert_notified normal "Expresso on" "Until 15:40 - idle"
 }
 
 @test "_wait: waits until the deadline" {
@@ -303,7 +372,7 @@ assert_notified() { # URGENCY TITLE BODY
     clock 1759158600
     run "$EXPRESSO" _wait
     assert_status 0
-    assert_notified normal "Expresso on" "Indefinitely · lid"
+    assert_notified normal "Expresso on" "Indefinitely - lid"
     assert_called sleep infinity
     refute_called gdbus
 }

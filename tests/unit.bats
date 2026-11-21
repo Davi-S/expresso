@@ -120,6 +120,38 @@ usage_hint="Try 'expresso --help' for more information."
     assert_stderr "expresso: unknown option '--forever'"$'\n'"$usage_hint"
 }
 
+# --- cli_parse_status --------------------------------------------------------
+
+@test "cli_parse_status: no options" {
+    run cli_parse_status
+    assert_status 0
+    assert_output "false"
+}
+
+@test "cli_parse_status: --notify" {
+    run cli_parse_status --notify
+    assert_status 0
+    assert_output "true"
+}
+
+@test "cli_parse_status: repeated --notify" {
+    run --separate-stderr cli_parse_status --notify --notify
+    assert_status 2
+    assert_stderr "expresso: option '--notify' given twice"$'\n'"$usage_hint"
+}
+
+@test "cli_parse_status: unknown option" {
+    run --separate-stderr cli_parse_status --lid
+    assert_status 2
+    assert_stderr "expresso: unknown option '--lid'"$'\n'"$usage_hint"
+}
+
+@test "cli_parse_status: unexpected argument" {
+    run --separate-stderr cli_parse_status 60
+    assert_status 2
+    assert_stderr "expresso: unexpected argument '60'"$'\n'"$usage_hint"
+}
+
 # --- is_bool, is_timestamp, is_safe_path -------------------------------------
 
 @test "is_bool accepts only true and false" {
@@ -220,7 +252,7 @@ usage_hint="Try 'expresso --help' for more information."
     assert_status 1
 }
 
-# --- format_until, describe_lock ---------------------------------------------
+# --- format_until, format_left, describe_lock --------------------------------
 # 1759158600 is Mon 2025-09-29 15:10 UTC; tests run with TZ=UTC.
 
 @test "format_until: time only when the deadline is today" {
@@ -242,16 +274,37 @@ usage_hint="Try 'expresso --help' for more information."
     assert_equal "$(format_until 1759421400 1759158600)" "Until Thu 16:10"
 }
 
+@test "format_left: the two largest units, rounded down" {
+    assert_equal "$(format_left 0)" "0s left"
+    assert_equal "$(format_left 59)" "59s left"
+    assert_equal "$(format_left 60)" "1m left"
+    assert_equal "$(format_left 1799)" "29m left"
+    assert_equal "$(format_left 3600)" "1h 0m left"
+    assert_equal "$(format_left 3959)" "1h 5m left"
+    assert_equal "$(format_left 86400)" "1d 0h left"
+    assert_equal "$(format_left 2147483647)" "24855d 3h left"
+}
+
 @test "describe_lock: deadline plus the extras that are on" {
-    assert_equal "$(describe_lock 1800 1759158600 false false 1759158600)" "Until 15:40"
-    assert_equal "$(describe_lock 1800 1759158600 true false 1759158600)" "Until 15:40 · lid"
-    assert_equal "$(describe_lock 1800 1759158600 false true 1759158600)" "Until 15:40 · idle"
-    assert_equal "$(describe_lock 1800 1759158600 true true 1759158600)" "Until 15:40 · lid, idle"
+    assert_equal "$(describe_lock 1800 1759158600 false false 1759158600 false)" "Until 15:40"
+    assert_equal "$(describe_lock 1800 1759158600 true false 1759158600 false)" "Until 15:40 - lid"
+    assert_equal "$(describe_lock 1800 1759158600 false true 1759158600 false)" "Until 15:40 - idle"
+    assert_equal "$(describe_lock 1800 1759158600 true true 1759158600 false)" "Until 15:40 - lid, idle"
 }
 
 @test "describe_lock: indefinite" {
-    assert_equal "$(describe_lock 0 1759158600 false false 1759158600)" "Indefinitely"
-    assert_equal "$(describe_lock 0 1759158600 true true 1759158600)" "Indefinitely · lid, idle"
+    assert_equal "$(describe_lock 0 1759158600 false false 1759158600 false)" "Indefinitely"
+    assert_equal "$(describe_lock 0 1759158600 true true 1759158600 false)" "Indefinitely - lid, idle"
+}
+
+@test "describe_lock: with the time left" {
+    assert_equal "$(describe_lock 1800 1759158600 false false 1759158660 true)" "Until 15:40 (29m left)"
+    assert_equal "$(describe_lock 1800 1759158600 true true 1759158660 true)" "Until 15:40 (29m left) - lid, idle"
+    assert_equal "$(describe_lock 0 1759158600 false true 1759158660 true)" "Indefinitely - idle"
+}
+
+@test "describe_lock: no negative time left once the deadline passed" {
+    assert_equal "$(describe_lock 60 1759158600 false false 1759158700 true)" "Until 15:11 (0s left)"
 }
 
 # --- stop_reason -------------------------------------------------------------
