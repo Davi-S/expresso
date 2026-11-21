@@ -6,8 +6,10 @@ expresso \- keep the system awake for a while
 .I DURATION
 .RB [ \-\-lid ]
 .RB [ \-\-idle ]
+.RB [ \-\-notify ]
 .br
 .B expresso off
+.RB [ \-\-notify ]
 .br
 .B expresso status
 .RB [ \-\-notify ]
@@ -49,12 +51,24 @@ Also keep closing the laptop lid from suspending the system.
 Also keep idle daemons, such as
 .BR hypridle ,
 from dimming, locking or turning off the screen.
+.TP
+.B \-\-notify
+If a lock is already on, also show it as a desktop notification; see
+.BR NOTIFICATIONS .
+The exit status is the same.
 .RE
 .IP
 The flags can appear in any order, each at most once.
 .TP
 .B off
 Release the lock. Returns once it is fully released.
+Fails if no lock is on.
+.RS
+.TP
+.B \-\-notify
+If no lock is on, also show that as a desktop notification.
+The exit status is the same.
+.RE
 .TP
 .B status
 Print the lock's state; see
@@ -151,6 +165,18 @@ journal).
 shows the lock's state on request, for example from a keybinding: "Expresso
 on" with when it ends and the time left ("Until 15:40 (29m left) \- idle"),
 or "Expresso off" with "No lock is on".
+With
+.BR \-\-notify ,
+.B on
+and
+.B off
+also notify when there is nothing to do, since the lock unit then sends
+nothing: "Expresso already on" with the running lock, as
+.B status
+shows it, or "Expresso already off" with "No lock is on".
+Without it, a toggle such as
+.B "expresso off || expresso on 3600"
+shows only the lock unit's notification.
 Otherwise the commands send no notifications themselves, and
 .B on
 and
@@ -182,8 +208,8 @@ released, or
 .B app-expresso.service
 exists but was not started by this version of
 .BR expresso ,
-or the notification of
-.B status \-\-notify
+or a notification asked for with
+.B \-\-notify
 could not be sent.
 .SH EXAMPLES
 Keep the system awake for 45 minutes:
@@ -210,10 +236,13 @@ expresso off 2>/dev/null || expresso on 3600 \-\-idle
 .fi
 .RE
 .PP
-Show the lock's state, for example from a keybinding:
+Separate keys to turn it on and off, each with a notification even when there
+is nothing to do, and one to show the state:
 .PP
 .RS
 .nf
+expresso on 0 \-\-notify
+expresso off \-\-notify
 expresso status \-\-notify >/dev/null
 .fi
 .RE

@@ -72,16 +72,16 @@ setup() {
 @test "cli_parse_on: duration only" {
     run cli_parse_on 1800
     assert_status 0
-    assert_output "1800 false false"
+    assert_output "1800 false false false"
 }
 
 @test "cli_parse_on: flags in any position" {
     run cli_parse_on 1800 --lid
-    assert_output "1800 true false"
+    assert_output "1800 true false false"
     run cli_parse_on --idle 0
-    assert_output "0 false true"
+    assert_output "0 false true false"
     run cli_parse_on --idle 60 --lid
-    assert_output "60 true true"
+    assert_output "60 true true false"
 }
 
 usage_hint="Try 'expresso --help' for more information."
@@ -120,34 +120,43 @@ usage_hint="Try 'expresso --help' for more information."
     assert_stderr "expresso: unknown option '--forever'"$'\n'"$usage_hint"
 }
 
-# --- cli_parse_status --------------------------------------------------------
-
-@test "cli_parse_status: no options" {
-    run cli_parse_status
+@test "cli_parse_on: --notify" {
+    run cli_parse_on --notify 60 --idle
     assert_status 0
-    assert_output "false"
-}
-
-@test "cli_parse_status: --notify" {
-    run cli_parse_status --notify
-    assert_status 0
-    assert_output "true"
-}
-
-@test "cli_parse_status: repeated --notify" {
-    run --separate-stderr cli_parse_status --notify --notify
+    assert_output "60 false true true"
+    run --separate-stderr cli_parse_on 60 --notify --notify
     assert_status 2
     assert_stderr "expresso: option '--notify' given twice"$'\n'"$usage_hint"
 }
 
-@test "cli_parse_status: unknown option" {
-    run --separate-stderr cli_parse_status --lid
+# --- cli_parse_notify --------------------------------------------------------
+
+@test "cli_parse_notify: no options" {
+    run cli_parse_notify
+    assert_status 0
+    assert_output "false"
+}
+
+@test "cli_parse_notify: --notify" {
+    run cli_parse_notify --notify
+    assert_status 0
+    assert_output "true"
+}
+
+@test "cli_parse_notify: repeated --notify" {
+    run --separate-stderr cli_parse_notify --notify --notify
+    assert_status 2
+    assert_stderr "expresso: option '--notify' given twice"$'\n'"$usage_hint"
+}
+
+@test "cli_parse_notify: unknown option" {
+    run --separate-stderr cli_parse_notify --lid
     assert_status 2
     assert_stderr "expresso: unknown option '--lid'"$'\n'"$usage_hint"
 }
 
-@test "cli_parse_status: unexpected argument" {
-    run --separate-stderr cli_parse_status 60
+@test "cli_parse_notify: unexpected argument" {
+    run --separate-stderr cli_parse_notify 60
     assert_status 2
     assert_stderr "expresso: unexpected argument '60'"$'\n'"$usage_hint"
 }

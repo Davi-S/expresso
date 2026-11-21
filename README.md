@@ -16,8 +16,9 @@ lock is on and how long it has left.
 - **Optional extras.** `--lid` keeps closing the lid from suspending; `--idle`
   keeps idle daemons such as hypridle from dimming, locking or turning off the
   screen.
-- **Notifications** when a lock starts, ends or fails, and on request:
-  `expresso status --notify` shows the lock's state, e.g. from a keybinding.
+- **Notifications** when a lock starts, ends or fails, and on request, e.g.
+  from a keybinding: `--notify` shows the lock's state, or that there was
+  nothing to do.
 
 ## Installation
 
@@ -42,8 +43,8 @@ sudo make uninstall            # to remove
 ## Usage
 
 ```
-expresso on DURATION [--lid] [--idle]
-expresso off
+expresso on DURATION [--lid] [--idle] [--notify]
+expresso off [--notify]
 expresso status [--notify]
 ```
 
@@ -77,6 +78,10 @@ state=off
 notification: "Expresso on" with `Until 15:40 (29m left) - idle`, or
 "Expresso off" with `No lock is on`.
 
+`on --notify` and `off --notify` also notify when there is nothing to do:
+"Expresso already on" with the running lock, or "Expresso already off". When
+they do something, the lock's own notification is enough.
+
 ### Exit status
 
 | Code | Meaning |
@@ -95,6 +100,10 @@ alias or script.
 ```bash
 # Toggle, e.g. bound to a key
 expresso off 2>/dev/null || expresso on 3600 --idle
+
+# Separate keys for on and off, notifying even when there is nothing to do
+expresso on 0 --notify
+expresso off --notify
 
 # Show the state, e.g. bound to a key
 expresso status --notify >/dev/null

@@ -14,8 +14,8 @@ This file records decisions. Open items are listed at the end.
 ## CLI
 
 ```
-expresso on DURATION [--lid] [--idle]
-expresso off
+expresso on DURATION [--lid] [--idle] [--notify]
+expresso off [--notify]
 expresso status [--notify]
 expresso --help
 expresso --version
@@ -30,7 +30,11 @@ expresso --version
 - **No config file.** Preferred flags live in the user's keybind or alias.
 - **stdout is data only; messages and errors go to stderr.**
 - **The CLI sends no notifications of its own.** The unit sends all of them,
-  except the one `status --notify` asks for.
+  except those `--notify` asks for: the state for `status`, and for `on` and
+  `off` the cases where there is nothing to do (already on, already off), in
+  which the unit sends nothing. It is opt-in so that a toggle
+  (`expresso off || expresso on 3600`) shows only the unit's notification.
+  The exit code is the same; a notification that fails is exit 4.
 - **`off` is synchronous:** when it returns, the lock is gone and `status` says off.
 - **`--help`** prints short usage to stdout and exits 0. `--version` prints
   `expresso X.Y.Z`. The full reference is `man expresso`.
@@ -138,7 +142,7 @@ stop the monitor
 
 ### Notifications
 
-Sent by the unit (`_wait` and `_stopped`), and by `status --notify` on request,
+Sent by the unit (`_wait` and `_stopped`), and by `--notify` on request,
 with `notify-send --app-name=expresso --expire-time=2000`. Separate
 notifications, no replacing.
 If the "started" notification fails, the lock is kept (holding it matters more).
@@ -151,6 +155,8 @@ If the "started" notification fails, the lock is kept (holding it matters more).
 | Failed | anything else: non-zero exit, core dump, no information | Expresso failed | `Could not take the lock. See: journalctl --user -u app-expresso` (critical) |
 | Status, on | `status --notify` while a lock is on | Expresso on | As "Started", with the time left after a deadline: `Until 15:40 (29m left) - idle`. The time left is in its two largest units, rounded down (`2d 3h`, `1h 5m`, `29m`, `45s`). |
 | Status, off | `status --notify` while no lock is on | Expresso off | `No lock is on` |
+| Already on | `on --notify` while a lock is on | Expresso already on | The running lock, as in "Status, on" |
+| Already off | `off --notify` while no lock is on | Expresso already off | `No lock is on` |
 
 ## Code structure
 

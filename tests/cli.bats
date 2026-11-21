@@ -13,7 +13,7 @@ usage_hint="Try 'expresso --help' for more information."
     run --separate-stderr "$EXPRESSO" --help
     assert_status 0
     assert_stderr ""
-    [[ "${lines[0]}" == "Usage: expresso on DURATION [--lid] [--idle]" ]] ||
+    [[ "${lines[0]}" == "Usage: expresso on DURATION [--lid] [--idle] [--notify]" ]] ||
         fail "unexpected first line: ${lines[0]}"
 }
 
@@ -39,7 +39,7 @@ usage_hint="Try 'expresso --help' for more information."
 
 @test "commands without arguments reject arguments" {
     local cmd
-    for cmd in off --help --version _wait _stopped; do
+    for cmd in --help --version _wait _stopped; do
         run --separate-stderr "$EXPRESSO" "$cmd" extra
         assert_status 2
         assert_stderr "expresso: '$cmd' takes no arguments"$'\n'"$usage_hint"
@@ -66,6 +66,11 @@ fake_lock_off() {
 # fake_lock_on DURATION STARTED LID IDLE: systemd reports a running lock unit.
 fake_lock_on() {
     fake systemctl --args "$SHOW_ARGS" --stdout "ActiveState=active"$'\n'"Environment=EXPRESSO_STARTED=$2 EXPRESSO_DURATION=$1 EXPRESSO_LID=$3 EXPRESSO_IDLE=$4"
+}
+
+# assert_notified URGENCY TITLE BODY: expresso sent this notification.
+assert_notified() { # URGENCY TITLE BODY
+    assert_called notify-send --app-name=expresso --expire-time=2000 "--urgency=$1" "$2" "$3"
 }
 
 # fake_now TIMESTAMP: the current time, as `date +%s` prints it.
@@ -268,6 +273,39 @@ assert_lock_started() {
     assert_called systemctl --user stop app-expresso.service
 }
 
+@test "on: sends no notification of its own" {
+    fake_lock_off
+    fake_now 1759158600
+    run "$EXPRESSO" on 1800 --notify
+    assert_status 0
+    refute_called notify-send
+
+    fake_lock_on 60 1759158600 false false
+    run "$EXPRESSO" on 1800
+    assert_status 3
+    refute_called notify-send
+}
+
+@test "on --notify: a lock already on is shown" {
+    fake_lock_on 1800 1759158600 true false
+    fake_now 1759158660
+    run --separate-stderr "$EXPRESSO" on 60 --notify
+    assert_status 3
+    assert_output ""
+    assert_stderr "expresso: a lock is already on; run 'expresso off' first"
+    assert_notified normal "Expresso already on" "Until 15:40 (29m left) - lid"
+    refute_called systemd-run
+}
+
+@test "on --notify: a failed notification is a system error" {
+    fake_lock_on 0 1759158600 false false
+    fake_now 1759158660
+    fake notify-send --exit 1
+    run --separate-stderr "$EXPRESSO" on 60 --notify
+    assert_status 4
+    assert_stderr "expresso: could not send a notification"
+}
+
 @test "off: no lock" {
     fake_lock_off
     run --separate-stderr "$EXPRESSO" off
@@ -275,6 +313,44 @@ assert_lock_started() {
     assert_stderr "expresso: no lock is on"
     refute_called systemd-run
     [[ "$(calls systemctl)" != *" stop "* ]] || fail "stop was called"
+}
+
+@test "off: sends no notification of its own" {
+    fake_lock_on 60 1759158600 false false
+    run "$EXPRESSO" off --notify
+    assert_status 0
+    refute_called notify-send
+
+    fake_lock_off
+    run "$EXPRESSO" off
+    assert_status 1
+    refute_called notify-send
+}
+
+@test "off --notify: no lock is shown" {
+    fake_lock_off
+    run --separate-stderr "$EXPRESSO" off --notify
+    assert_status 1
+    assert_output ""
+    assert_stderr "expresso: no lock is on"
+    assert_notified normal "Expresso already off" "No lock is on"
+}
+
+@test "off --notify: a failed notification is a system error" {
+    fake_lock_off
+    fake notify-send --exit 1
+    run --separate-stderr "$EXPRESSO" off --notify
+    assert_status 4
+    assert_stderr "expresso: could not send a notification"
+}
+
+@test "off: arguments other than --notify are usage errors" {
+    run --separate-stderr "$EXPRESSO" off extra
+    assert_status 2
+    assert_stderr "expresso: unexpected argument 'extra'"$'\n'"$usage_hint"
+    run --separate-stderr "$EXPRESSO" off --idle
+    assert_status 2
+    assert_stderr "expresso: unknown option '--idle'"$'\n'"$usage_hint"
 }
 
 @test "off: systemctl stop failing is a system error" {
@@ -303,10 +379,6 @@ clock() {
     for ((i = ${#times[@]} - 2; i >= 0; i--)); do
         fake date --args "+%s" --stdout "${times[i]}" --once
     done
-}
-
-assert_notified() { # URGENCY TITLE BODY
-    assert_called notify-send --app-name=expresso --expire-time=2000 "--urgency=$1" "$2" "$3"
 }
 
 @test "_wait: notifies that the lock is on" {

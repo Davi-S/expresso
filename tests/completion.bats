@@ -33,28 +33,31 @@ complete_words() {
 }
 
 @test "after on: the flags" {
-    assert_equal "$(complete_words on "")" "--lid --idle"
+    assert_equal "$(complete_words on "")" "--lid --idle --notify"
     assert_equal "$(complete_words on 1800 "--i")" "--idle"
 }
 
 @test "after on: each flag is offered once" {
-    assert_equal "$(complete_words on --lid "")" "--idle"
-    assert_equal "$(complete_words on 60 --idle --lid "")" ""
+    assert_equal "$(complete_words on --lid "")" "--idle --notify"
+    assert_equal "$(complete_words on 60 --idle --lid --notify "")" ""
 }
 
 @test "after on: nothing to suggest for a duration" {
     assert_equal "$(complete_words on "18")" ""
 }
 
-@test "after status: --notify, once" {
-    assert_equal "$(complete_words status "")" "--notify"
-    assert_equal "$(complete_words status "--n")" "--notify"
-    assert_equal "$(complete_words status --notify "")" ""
+@test "after off and status: --notify, once" {
+    local cmd
+    for cmd in off status; do
+        assert_equal "$(complete_words "$cmd" "")" "--notify"
+        assert_equal "$(complete_words "$cmd" "--n")" "--notify"
+        assert_equal "$(complete_words "$cmd" --notify "")" ""
+    done
 }
 
 @test "the other commands take no arguments" {
     local cmd
-    for cmd in off --help --version; do
+    for cmd in --help --version; do
         assert_equal "$(complete_words "$cmd" "")" ""
     done
 }

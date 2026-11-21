@@ -6,6 +6,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `on --notify` and `off --notify` also notify when there is nothing to do:
+  "Expresso already on" with the running lock (`Until 15:40 (29m left) -
+  idle`), or "Expresso already off" with `No lock is on`. The exit code is
+  the same. Without `--notify`, nothing changes, so a toggle such as
+  `expresso off || expresso on 3600` still shows only the lock's notification.
+
 ## [2.1.0] - 2026-11-21
 
 ### Added

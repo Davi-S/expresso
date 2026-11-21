@@ -365,20 +365,39 @@ sys_wait_forever() {
 
 # --- core --------------------------------------------------------------------
 
-# core_on DURATION LID IDLE
+# core_on DURATION LID IDLE NOTIFY
+# With NOTIFY true, a lock that is already on is also shown as a notification.
 core_on() {
-    local -r duration="$1" lid="$2" idle="$3"
+    local -r duration="$1" lid="$2" idle="$3" notify="$4"
     local state now
     state="$(sys_unit_state)" || return
-    [[ "$state" == inactive ]] || return "$EXIT_ALREADY_ON"
+    if [[ "$state" != inactive ]]; then
+        if [[ "$notify" == true ]]; then
+            local running_duration started running_lid running_idle
+            read -r _ running_duration started running_lid running_idle <<<"$state"
+            now="$(sys_now)" || return
+            sys_notify normal "Expresso already on" \
+                "$(describe_lock "$running_duration" "$started" "$running_lid" "$running_idle" "$now" true)" ||
+                return
+        fi
+        return "$EXIT_ALREADY_ON"
+    fi
     now="$(sys_now)" || return
     sys_unit_start "$duration" "$now" "$lid" "$idle"
 }
 
+# core_off NOTIFY
+# With NOTIFY true, having no lock to release is also shown as a notification.
 core_off() {
+    local -r notify="$1"
     local state
     state="$(sys_unit_state)" || return
-    [[ "$state" != inactive ]] || return "$EXIT_NO_LOCK"
+    if [[ "$state" == inactive ]]; then
+        if [[ "$notify" == true ]]; then
+            sys_notify normal "Expresso already off" "No lock is on" || return
+        fi
+        return "$EXIT_NO_LOCK"
+    fi
     sys_unit_stop
 }
 
@@ -446,8 +465,8 @@ usage_error() {
 
 cli_help() {
     cat <<EOF
-Usage: expresso on DURATION [--lid] [--idle]
-       expresso off
+Usage: expresso on DURATION [--lid] [--idle] [--notify]
+       expresso off [--notify]
        expresso status [--notify]
        expresso --help | --version
 
@@ -459,7 +478,9 @@ Commands:
       --idle   Also keep the screen from dimming, locking or turning off.
   off          Release the lock.
   status       Print the lock state as key=value lines.
-      --notify Also show the state as a desktop notification.
+
+  --notify     Also show a desktop notification when 'on' finds a lock
+               already on, when 'off' finds none, and for 'status'.
 
 Exit codes: 0 success or lock on, 1 no lock, 2 usage error,
             3 lock already on, 4 system error.
@@ -477,11 +498,15 @@ cli_no_args() {
 }
 
 # cli_parse_on ARG...
-# Validate the arguments of `on`. Prints "DURATION LID IDLE".
+# Validate the arguments of `on`. Prints "DURATION LID IDLE NOTIFY".
 cli_parse_on() {
-    local duration="" lid=false idle=false arg
+    local duration="" lid=false idle=false notify=false arg
     for arg in "$@"; do
         case "$arg" in
+        --notify)
+            [[ "$notify" == false ]] || usage_error "option '--notify' given twice" || return
+            notify=true
+            ;;
         --lid)
             [[ "$lid" == false ]] || usage_error "option '--lid' given twice" || return
             lid=true
@@ -504,14 +529,14 @@ cli_parse_on() {
         esac
     done
     [[ -n "$duration" ]] || usage_error "missing DURATION" || return
-    printf '%s %s %s\n' "$duration" "$lid" "$idle"
+    printf '%s %s %s %s\n' "$duration" "$lid" "$idle" "$notify"
 }
 
 cli_on() {
-    local request duration lid idle
+    local request duration lid idle notify
     request="$(cli_parse_on "$@")" || return
-    read -r duration lid idle <<<"$request"
-    core_on "$duration" "$lid" "$idle" && return
+    read -r duration lid idle notify <<<"$request"
+    core_on "$duration" "$lid" "$idle" "$notify" && return
     local -r code=$?
     if ((code == EXIT_ALREADY_ON)); then
         err "a lock is already on; run 'expresso off' first"
@@ -520,8 +545,9 @@ cli_on() {
 }
 
 cli_off() {
-    cli_no_args off "$@" || return
-    core_off && return
+    local notify
+    notify="$(cli_parse_notify "$@")" || return
+    core_off "$notify" && return
     local -r code=$?
     if ((code == EXIT_NO_LOCK)); then
         err "no lock is on"
@@ -529,9 +555,10 @@ cli_off() {
     return "$code"
 }
 
-# cli_parse_status ARG...
-# Validate the arguments of `status`. Prints NOTIFY.
-cli_parse_status() {
+# cli_parse_notify ARG...
+# Validate the arguments of `off` and `status`, whose only option is --notify.
+# Prints NOTIFY.
+cli_parse_notify() {
     local notify=false arg
     for arg in "$@"; do
         case "$arg" in
@@ -548,7 +575,7 @@ cli_parse_status() {
 
 cli_status() {
     local notify
-    notify="$(cli_parse_status "$@")" || return
+    notify="$(cli_parse_notify "$@")" || return
     core_status "$notify"
 }
 
