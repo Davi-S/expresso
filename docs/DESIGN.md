@@ -146,6 +146,8 @@ Sent by the unit (`_wait` and `_stopped`), and by `--notify` on request,
 with `notify-send --app-name=expresso --expire-time=2000`. Separate
 notifications, no replacing.
 If the "started" notification fails, the lock is kept (holding it matters more).
+The `--notify` titles say "status:", so they are not mistaken for a lock that
+really started or ended.
 
 | Event | Detected by | Title | Body |
 |---|---|---|---|
@@ -153,10 +155,10 @@ If the "started" notification fails, the lock is kept (holding it matters more).
 | Time's up | `EXIT_CODE=exited`, `EXIT_STATUS=0` | Expresso off | `Time's up` |
 | Turned off | `EXIT_CODE=killed` (any signal) | Expresso off | `Turned off` |
 | Failed | anything else: non-zero exit, core dump, no information | Expresso failed | `Could not take the lock. See: journalctl --user -u app-expresso` (critical) |
-| Status, on | `status --notify` while a lock is on | Expresso on | As "Started", with the time left after a deadline: `Until 15:40 (29m left) - idle`. The time left is in its two largest units, rounded down (`2d 3h`, `1h 5m`, `29m`, `45s`). |
-| Status, off | `status --notify` while no lock is on | Expresso off | `No lock is on` |
-| Already on | `on --notify` while a lock is on | Expresso already on | The running lock, as in "Status, on" |
-| Already off | `off --notify` while no lock is on | Expresso already off | `No lock is on` |
+| Status, on | `status --notify` while a lock is on | Expresso status: on | As "Started", with the time left after a deadline: `Until 15:40 (29m left) - idle`. The time left is in its two largest units, rounded down (`2d 3h`, `1h 5m`, `29m`, `45s`). |
+| Status, off | `status --notify` while no lock is on | Expresso status: off | `No lock is on` |
+| Already on | `on --notify` while a lock is on | Expresso status: already on | The running lock, as in "Status, on" |
+| Already off | `off --notify` while no lock is on | Expresso status: already off | `No lock is on` |
 
 ## Code structure
 

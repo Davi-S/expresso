@@ -376,7 +376,7 @@ core_on() {
             local running_duration started running_lid running_idle
             read -r _ running_duration started running_lid running_idle <<<"$state"
             now="$(sys_now)" || return
-            sys_notify normal "Expresso already on" \
+            sys_notify normal "Expresso status: already on" \
                 "$(describe_lock "$running_duration" "$started" "$running_lid" "$running_idle" "$now" true)" ||
                 return
         fi
@@ -394,7 +394,7 @@ core_off() {
     state="$(sys_unit_state)" || return
     if [[ "$state" == inactive ]]; then
         if [[ "$notify" == true ]]; then
-            sys_notify normal "Expresso already off" "No lock is on" || return
+            sys_notify normal "Expresso status: already off" "No lock is on" || return
         fi
         return "$EXIT_NO_LOCK"
     fi
@@ -411,7 +411,7 @@ core_status() {
     if [[ "$state" == inactive ]]; then
         printf 'state=off\n'
         if [[ "$notify" == true ]]; then
-            sys_notify normal "Expresso off" "No lock is on" || return
+            sys_notify normal "Expresso status: off" "No lock is on" || return
         fi
         return "$EXIT_NO_LOCK"
     fi
@@ -420,7 +420,7 @@ core_status() {
     now="$(sys_now)" || return
     format_status "$duration" "$started" "$lid" "$idle" "$now"
     if [[ "$notify" == true ]]; then
-        sys_notify normal "Expresso on" \
+        sys_notify normal "Expresso status: on" \
             "$(describe_lock "$duration" "$started" "$lid" "$idle" "$now" true)" || return
     fi
 }

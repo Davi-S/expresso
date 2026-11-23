@@ -172,14 +172,14 @@ fi
 cat <<'EOF'
 
   You should have seen eight notifications, each for about 2 seconds:
-    Expresso on           Until HH:MM - idle
-    Expresso off          Time's up
-    Expresso on           Indefinitely - lid
-    Expresso on           Indefinitely - lid   (status --notify)
-    Expresso already on   Indefinitely - lid   (on --notify)
-    Expresso off          Turned off
-    Expresso off          No lock is on        (status --notify)
-    Expresso already off  No lock is on        (off --notify)
+    Expresso on                    Until HH:MM - idle
+    Expresso off                   Time's up
+    Expresso on                    Indefinitely - lid
+    Expresso status: on            Indefinitely - lid   (status --notify)
+    Expresso status: already on    Indefinitely - lid   (on --notify)
+    Expresso off                   Turned off
+    Expresso status: off           No lock is on        (status --notify)
+    Expresso status: already off   No lock is on        (off --notify)
 EOF
 
 # -----------------------------------------------------------------------------

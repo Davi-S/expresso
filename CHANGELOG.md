@@ -6,6 +6,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The notifications shown by `--notify` say "status:" in the title, so they
+  are not mistaken for the ones sent when a lock really starts or ends:
+  "Expresso status: on", "Expresso status: off", "Expresso status: already
+  on" and "Expresso status: already off".
+
 ## [2.2.0] - 2026-11-21
 
 ### Added

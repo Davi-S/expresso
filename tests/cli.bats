@@ -135,7 +135,7 @@ assert_lock_started() {
     assert_status 1
     assert_output "state=off"
     assert_stderr ""
-    assert_notified normal "Expresso off" "No lock is on"
+    assert_notified normal "Expresso status: off" "No lock is on"
 }
 
 @test "status --notify: timed lock" {
@@ -146,7 +146,7 @@ assert_lock_started() {
     assert_output "$(printf '%s\n' state=on duration=1800 started=1759158600 \
         until=1759160400 remaining=1740 lid=false idle=true)"
     assert_stderr ""
-    assert_notified normal "Expresso on" "Until 15:40 (29m left) - idle"
+    assert_notified normal "Expresso status: on" "Until 15:40 (29m left) - idle"
 }
 
 @test "status --notify: indefinite lock" {
@@ -154,7 +154,7 @@ assert_lock_started() {
     fake_now 1759158660
     run "$EXPRESSO" status --notify
     assert_status 0
-    assert_notified normal "Expresso on" "Indefinitely - lid"
+    assert_notified normal "Expresso status: on" "Indefinitely - lid"
 }
 
 @test "status --notify: a failed notification is a system error, after the output" {
@@ -293,7 +293,7 @@ assert_lock_started() {
     assert_status 3
     assert_output ""
     assert_stderr "expresso: a lock is already on; run 'expresso off' first"
-    assert_notified normal "Expresso already on" "Until 15:40 (29m left) - lid"
+    assert_notified normal "Expresso status: already on" "Until 15:40 (29m left) - lid"
     refute_called systemd-run
 }
 
@@ -333,7 +333,7 @@ assert_lock_started() {
     assert_status 1
     assert_output ""
     assert_stderr "expresso: no lock is on"
-    assert_notified normal "Expresso already off" "No lock is on"
+    assert_notified normal "Expresso status: already off" "No lock is on"
 }
 
 @test "off --notify: a failed notification is a system error" {

@@ -75,12 +75,15 @@ state=off
 `until` and `remaining` are `infinity` for a lock started with `on 0`.
 
 `status --notify` prints the same, and also shows the state as a desktop
-notification: "Expresso on" with `Until 15:40 (29m left) - idle`, or
-"Expresso off" with `No lock is on`.
+notification: "Expresso status: on" with `Until 15:40 (29m left) - idle`, or
+"Expresso status: off" with `No lock is on`.
 
 `on --notify` and `off --notify` also notify when there is nothing to do:
-"Expresso already on" with the running lock, or "Expresso already off". When
-they do something, the lock's own notification is enough.
+"Expresso status: already on" with the running lock, or "Expresso status:
+already off". When they do something, the lock's own notification is enough.
+
+The "status:" in the title tells these apart from the notifications sent when
+a lock really starts or ends ("Expresso on", "Expresso off").
 
 ### Exit status
 
